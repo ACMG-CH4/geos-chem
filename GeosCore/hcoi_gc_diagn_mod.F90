@@ -1,5 +1,5 @@
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -9,7 +9,7 @@
 ! module for the HEMCO diagnostics. For every GEOS-Chem emissions diagnostics,
 ! a corresponding HEMCO diagnostics is created. The HEMCO diagnostics become
 ! (automatically) filled and updated when calling HEMCO. They are passed
-! back to GEOS-Chem when writing the diagnostics (e.g. in diag3.F).
+! back to GEOS-Chem when writing the diagnostics (e.g. in diag3.F90).
 !\\
 !\\
 ! Notes:
@@ -20,8 +20,8 @@
 !  Diagnostics will not represent what they should if these category numbers
 !  get changed!
 ! \item In HEMCO, ocean sinks are treated as drydep and the calculated
-!  deposition velocities are passed to drydep\_mod.F. Hence, no Acetone or ALD2
-!  ocean sink is calculated by HEMCO and the DMS diagnostics only includes
+!  deposition velocities are passed to drydep\_mod.F90. Hence, no Acetone or
+!  ALD2 ocean sink is calculated by HEMCO and the DMS diagnostics only includes
 !  the ocean flux (this is NOT the net flux!!).
 !  If needed, we can build a simple wrapper in hcoi\_gc\_main\_mod.F90 that
 !  explicitly calculates oceanic fluxes.
@@ -33,8 +33,6 @@ MODULE HCOI_GC_Diagn_Mod
 !
 ! !USES:
 !
-  ! GEOS-Chem diagnostic switches and arrays
-  USE CMN_SIZE_Mod
 #ifdef BPCH_DIAG
   USE CMN_DIAG_Mod
   USE DIAG_Mod
@@ -42,7 +40,6 @@ MODULE HCOI_GC_Diagn_Mod
 #endif
   USE HCO_Diagn_Mod
   USE HCO_Error_Mod
-  USE HCO_Interface_Mod
 
   IMPLICIT NONE
   PRIVATE
@@ -64,14 +61,14 @@ MODULE HCOI_GC_Diagn_Mod
 !
 ! !REVISION HISTORY:
 !  04 May 2014 - C. Keller   - Initial version.
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 CONTAINS
 !EOC
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -83,7 +80,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE HCOI_GC_Diagn_Init( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+  SUBROUTINE HCOI_GC_Diagn_Init( Input_Opt, HcoState, ExtState, RC )
 !
 ! !USES:
 !
@@ -94,10 +91,6 @@ CONTAINS
     USE HCO_State_Mod,      ONLY : HCO_State
     USE HCOX_State_Mod,     ONLY : Ext_State
     USE Input_Opt_Mod,      ONLY : OptInput
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,          INTENT(IN   )  :: am_I_Root  ! Are we on the root CPU?
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -119,7 +112,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  12 Sep 2013 - C. Keller   - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -149,7 +142,7 @@ CONTAINS
     !%%%%  sure that routine DIAGN_CH4 is outside the BPCH_DIAG #if     %%%%
     !%%%%  block.  -- Bob Yantosca (25 Jan 2018)                        %%%%
     !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    CALL Diagn_CH4( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+    CALL Diagn_CH4( Input_Opt, HcoState, ExtState, RC )
 
     ! Trap potential errors
     IF ( RC /= HCO_SUCCESS ) THEN
@@ -165,7 +158,7 @@ CONTAINS
     !%%%%  sure that routine DIAGN_Hg is outside the BPCH_DIAG #if      %%%%
     !%%%%  block.  -- Bob Yantosca (25 Jan 2018)                        %%%%
     !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    CALL Diagn_Hg( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+    CALL Diagn_Hg( Input_Opt, HcoState, ExtState, RC )
 
     ! Trap potential errors
     IF ( RC /= HCO_SUCCESS ) THEN
@@ -174,31 +167,15 @@ CONTAINS
        RETURN
     ENDIF
 
-    !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    !%%%%  NOTE: Some diagnostics for the POPs simulation do not have   %%%%
-    !%%%%  any species associated with them, and thus need to be        %%%%
-    !%%%%  declared as manual diagnostics.  We need to move the call    %%%%
-    !%%%%  to Diagn_POPs outside of the #ifdef BPCH_DIAG block.         %%%%
-    !%%%%    -- Bob Yantosca (09 Oct 2018)                              %%%%
-    !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    CALL Diagn_POPs( am_I_Root, Input_Opt, HcoState, ExtState, RC )
-
-    ! Trap potential errors
-    IF ( RC /= HCO_SUCCESS ) THEN
-       ErrMsg = 'Error encountered in "Diagn_POPs"'
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
-       RETURN
-    ENDIF
-
 #ifdef BPCH_DIAG
     !=======================================================================
     ! Define manual diagnostics
     !=======================================================================
-    CALL Diagn_Dust    ( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+    CALL Diagn_Dust    ( Input_Opt, HcoState, ExtState, RC )
     IF ( RC /= HCO_SUCCESS ) RETURN
 
 #ifdef TOMAS
-    CALL Diagn_TOMAS   ( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+    CALL Diagn_TOMAS   ( Input_Opt, HcoState, ExtState, RC )
     IF ( RC /= HCO_SUCCESS ) RETURN
 #endif
 #endif
@@ -208,7 +185,7 @@ CONTAINS
   END SUBROUTINE HCOI_GC_Diagn_Init
 !EOC
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -220,7 +197,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Diagn_CH4( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+  SUBROUTINE Diagn_CH4( Input_Opt, HcoState, ExtState, RC )
 !
 ! !USES:
 !
@@ -230,10 +207,6 @@ CONTAINS
     USE HCOX_State_Mod,     ONLY : Ext_State
     USE Input_Opt_Mod,      ONLY : OptInput
     USE State_Chm_Mod,      ONLY : Ind_
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,          INTENT(IN   )  :: am_I_Root  ! Are we on the root CPU?
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -251,13 +224,13 @@ CONTAINS
 !\\
 !  CH4 diagnostics need to be defined even if ND58 is turned off because
 !  the diagnostics are also being used to write CH4 emissions from the
-!  individual sources (gas, coal, etc.) into STT (in global\_ch4\_mod.F).
+!  individual sources (gas, coal, etc.) into STT (in global\_ch4\_mod.F90).
 !  The categories defined here need to match the ones specified in the
 !  HEMCO configuration file.
 !
 ! !REVISION HISTORY:
 !  13 Sep 2014 - C. Keller   - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -301,8 +274,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_OIL'
-       CALL Diagn_Create( am_I_Root,                                         &
-                          HcoState  = HcoState,                              &
+       CALL Diagn_Create( HcoState  = HcoState,                              &
                           cName     = TRIM( DiagnName ),                     &
                           ExtNr     = ExtNr,                                 &
                           Cat       = Cat,                                   &
@@ -333,8 +305,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_GAS'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -364,8 +335,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_COAL'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -395,8 +365,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_LIVESTOCK'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -426,8 +395,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_LANDFILLS'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -457,8 +425,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_WASTEWATER'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -488,8 +455,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_RICE'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -519,8 +485,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_ANTHROTHER'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -550,8 +515,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_BIOMASS'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -581,8 +545,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_WETLAND'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -612,8 +575,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_SEEPS'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -643,8 +605,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_LAKES'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -674,8 +635,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_TERMITES'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -705,8 +665,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'CH4_SOILABSORB'
-       CALL Diagn_Create( am_I_Root,                     &
-                          HcoState  = HcoState,          &
+       CALL Diagn_Create( HcoState  = HcoState,          &
                           cName     = TRIM( DiagnName ), &
                           ExtNr     = ExtNr,             &
                           Cat       = Cat,               &
@@ -724,7 +683,7 @@ CONTAINS
   END SUBROUTINE Diagn_CH4
 !EOC
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -736,7 +695,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Diagn_Dust( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+  SUBROUTINE Diagn_Dust( Input_Opt, HcoState, ExtState, RC )
 !
 ! !USES:
 !
@@ -745,10 +704,6 @@ CONTAINS
     USE HCO_State_Mod,      ONLY : HCO_State
     USE HCOX_State_Mod,     ONLY : Ext_State
     USE Input_Opt_Mod,      ONLY : OptInput
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,          INTENT(IN   )  :: am_I_Root  ! Are we on the root CPU?
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -763,7 +718,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  20 Aug 2014 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -846,8 +801,7 @@ CONTAINS
           IF ( RC /= HCO_SUCCESS ) RETURN
 
           ! Create diagnostic container
-          CALL Diagn_Create( am_I_Root,                     &
-                             HcoState  = HcoState,          &
+          CALL Diagn_Create( HcoState  = HcoState,          &
                              cName     = TRIM( DiagnName ), &
                              ExtNr     = ExtNr,             &
                              Cat       = Cat,               &
@@ -887,8 +841,7 @@ CONTAINS
              IF ( RC /= HCO_SUCCESS ) RETURN
 
              ! Create diagnostic container
-             CALL Diagn_Create( am_I_Root,                     &
-                                HcoState  = HcoState,          &
+             CALL Diagn_Create( HcoState  = HcoState,          &
                                 cName     = TRIM( DiagnName ), &
                                 ExtNr     = ExtNr,             &
                                 Cat       = -1,                &
@@ -908,258 +861,9 @@ CONTAINS
 #endif
 
   END SUBROUTINE Diagn_Dust
-
 !EOC
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
-!------------------------------------------------------------------------------
-!BOP
-!
-! !IROUTINE: Diagn_POPs
-!
-! !DESCRIPTION: Subroutine Diagn\_POPs initializes several HEMCO manual
-!  diagnostics for the POPs simulation.  These diagnostics are updated
-!  in the HEMCO extensions module hcox\_gc\_POPs\_mod.F90.
-!\\
-!\\
-! !INTERFACE:
-!
-  SUBROUTINE Diagn_POPs( am_I_Root, Input_Opt, HcoState, ExtState, RC )
-!
-! !USES:
-!
-    USE HCO_ExtList_Mod,    ONLY : GetExtNr
-    USE HCO_State_Mod,      ONLY : HCO_State
-    USE HCOX_State_Mod,     ONLY : Ext_State
-    USE Input_Opt_Mod,      ONLY : OptInput
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,          INTENT(IN   )  :: am_I_Root  ! Are we on the root CPU?
-!
-! !INPUT/OUTPUT PARAMETERS:
-!
-    TYPE(OptInput),   INTENT(INOUT)  :: Input_Opt  ! Input opts
-    TYPE(HCO_State),  POINTER        :: HcoState   ! HEMCO state object
-    TYPE(EXT_State),  POINTER        :: ExtState   ! Extensions state object
-    INTEGER,          INTENT(INOUT)  :: RC         ! Failure or success
-!
-! !REMARKS:
-!  Split off code from HCOI_GC_Diagn_Init into smaller routines in order to
-!  make the code more manageable.
-!
-! !REVISION HISTORY:
-!  26 Aug 2014 - M. Sulprizio- Initial version
-!  See the Git history with the gitk browser!
-!EOP
-!------------------------------------------------------------------------------
-!BOC
-!
-! !LOCAL VARIABLES:
-!
-    INTEGER            :: ExtNr, HcoID, N, I
-    CHARACTER(LEN=31)  :: DiagnName, OutOper, OutUnit
-    CHARACTER(LEN=255) :: MSG
-    CHARACTER(LEN=255) :: LOC = 'DIAGN_POPs (hcoi_gc_diagn_mod.F90)'
-
-    !=======================================================================
-    ! Define ND53 diagnostics (POPs emissions)
-    !=======================================================================
-
-    ! Assume success
-    RC = HCO_SUCCESS
-
-    ! Exit if the POPs simulation is not selected
-    IF ( .not. Input_Opt%ITS_A_POPS_SIM ) RETURN
-
-    ! For the HISTORY netCDF diagnostics, we want to get the instantaneous
-    ! values archived by HEMCO and then let HISTORY do the averaging.
-    OutOper = 'Instantaneous'
-
-#ifdef BPCH_DIAG
-    ! Exit if ND53 diagnostics aren't turned on
-    IF ( ND53 <= 0 ) RETURN
-
-    ! For the bpch diagnostics, change units to kg/s to help in validating
-    ! the netCDF diagnostics.  But select "Mean" diagnostics since these
-    ! are only ouptut at the end.
-    OutOper = 'Mean'
-#endif
-
-    ! Define diagnostics
-    IF ( ExtState%GC_POPs > 0 ) THEN
-
-       ! HEMCO extension # for POPs
-       ExtNr = GetExtNr( HcoState%Config%ExtList, 'GC_POPs' )
-       IF ( ExtNr <= 0 ) THEN
-          MSG = 'Cannot find the POPs extension for HEMCO!'
-          CALL HCO_Error( MSG, RC, THISLOC=LOC )
-          RETURN
-       ENDIF
-
-       ! Create diagnostic container
-       DiagnName = 'GCPOPS_POPG_SOURCE'
-       CALL Diagn_Create( am_I_Root,                                         &
-                          HcoState  = HcoState,                              &
-                          cName     = TRIM( DiagnName ),                     &
-                          ExtNr     = ExtNr,                                 &
-                          Cat       = -1,                                    &
-                          Hier      = -1,                                    &
-                          HcoID     = HcoID,                                 &
-                          SpaceDim  = 2,                                     &
-                          LevIDx    = -1,                                    &
-                          OutUnit   = 'kg/m2/s',                             &
-                          OutOper   = OutOper,                               &
-                          COL       = HcoState%Diagn%HcoDiagnIDManual,       &
-                          AutoFill  = 1,                                     &
-                          RC        = RC                                    )
-
-       ! Trap potential errors
-       IF ( RC /= HCO_SUCCESS ) THEN
-          MSG = 'Could not define POPs diagnostic: '// TRIM( DiagnName )
-          CALL HCO_Error( MSG, RC, THISLOC=LOC )
-          RETURN
-       ENDIF
-
-       !-------------------------------------------
-       ! %%%%% OC-phase POP emissions %%%%%
-       !-------------------------------------------
-       ! HEMCO species ID
-       HcoID = GetHemcoId( 'POPPOCPO', HcoState, LOC, RC )
-       IF ( RC /= HCO_SUCCESS ) RETURN
-
-       ! Create diagnostic container
-       DiagnName = 'GCPOPS_POPPOCPO_SOURCE'
-       CALL Diagn_Create( am_I_Root,                                         &
-                          HcoState  = HcoState,                              &
-                          cName     = TRIM( DiagnName ),                     &
-                          ExtNr     = ExtNr,                                 &
-                          Cat       = -1,                                    &
-                          Hier      = -1,                                    &
-                          HcoID     = HcoID,                                 &
-                          SpaceDim  = 2,                                     &
-                          LevIDx    = -1,                                    &
-                          OutUnit   = 'kg/m2/s',                             &
-                          OutOper   = OutOper,                               &
-                          COL       = HcoState%Diagn%HcoDiagnIDManual,       &
-                          AutoFill  = 1,                                     &
-                          RC        = RC                                    )
-
-       ! Trap potential errors
-       IF ( RC /= HCO_SUCCESS ) THEN
-          MSG = 'Could not define POPs diagnostic: '// TRIM( DiagnName )
-          CALL HCO_Error( MSG, RC, THISLOC=LOC )
-          RETURN
-       ENDIF
-
-       !-------------------------------------------
-       ! %%%%% BC-phase POP emissions %%%%%
-       !-------------------------------------------
-
-       ! HEMCO species ID
-       HcoID = GetHemcoId( 'POPPBCPO', HcoState, LOC, RC )
-       IF ( RC /= HCO_SUCCESS ) RETURN
-
-       ! Create diagnostic container
-       DiagnName = 'GCPOPS_POPPBCPO_SOURCE'
-       CALL Diagn_Create( am_I_Root,                                         &
-                          HcoState  = HcoState,                              &
-                          cName     = TRIM(DiagnName),                       &
-                          ExtNr     = ExtNr,                                 &
-                          Cat       = -1,                                    &
-                          Hier      = -1,                                    &
-                          HcoID     = HcoID,                                 &
-                          SpaceDim  = 2,                                     &
-                          LevIDx    = -1,                                    &
-                          OutUnit   = 'kg/m2/s',                             &
-                          OutOper   = OutOper,                               &
-                          COL       = HcoState%Diagn%HcoDiagnIDManual,       &
-                          AutoFill  = 1,                                     &
-                          RC        = RC                                    )
-
-       ! Trap potential errors
-       IF ( RC /= HCO_SUCCESS ) THEN
-          MSG = 'Could not define POPs diagnostic '// TRIM( DiagnName )
-          CALL HCO_Error( MSG, RC, THISLOC=LOC )
-          RETURN
-       ENDIF
-
-       !-------------------------------------------
-       ! %%%%% Manual diagnostics %%%%%
-       !-------------------------------------------
-
-       DO I = 1,12
-
-          ! Define diagnostic names. These have to match the names
-          ! in module HEMCO/Extensions/hcox_gc_POPs_mod.F90.
-          IF ( I == 1 ) THEN
-             DiagnName = 'GCPOPS_POPG_SOIL'
-             OutUnit   = 'kg/m2/s'
-          ELSEIF ( I == 2  ) THEN
-             DiagnName = 'GCPOPS_POPG_LAKE'
-             OutUnit   = 'kg/m2/s'
-          ELSEIF ( I == 3  ) THEN
-             DiagnName = 'GCPOPS_POPG_LEAF'
-             OutUnit   = 'kg/m2/s'
-          ELSEIF ( I == 4  ) THEN
-             DiagnName = 'GCPOPS_SOIL2AIR'
-             OutUnit   = 'ng/m2/day'
-          ELSEIF ( I == 5  ) THEN
-             DiagnName = 'GCPOPS_AIR2SOIL'
-             OutUnit   = 'ng/m2/day'
-          ELSEIF ( I == 6  ) THEN
-             DiagnName = 'GCPOPS_LAKE2AIR'
-             OutUnit   = 'ng/m2/day'
-          ELSEIF ( I == 7  ) THEN
-             DiagnName = 'GCPOPS_AIR2LAKE'
-             OutUnit   = 'ng/m2/day'
-          ELSEIF ( I == 8  ) THEN
-             DiagnName = 'GCPOPS_LEAF2AIR'
-             OutUnit   = 'ng/m2/day'
-          ELSEIF ( I == 9  ) THEN
-             DiagnName = 'GCPOPS_AIR2LEAF'
-             OutUnit   = 'ng/m2/day'
-          ELSEIF ( I == 10 ) THEN
-             DiagnName = 'GCPOPS_SOILAIR_FUG'
-             OutUnit   = '1'
-          ELSEIF ( I == 11 ) THEN
-             DiagnName = 'GCPOPS_LAKEAIR_FUG'
-             OutUnit   = '1'
-          ELSEIF ( I == 12 ) THEN
-             DiagnName = 'GCPOPS_LEAFAIR_FUG'
-             OutUnit   = '1'
-          ENDIF
-
-          ! Create manual diagnostics
-          CALL Diagn_Create( am_I_Root,                                      &
-                             HcoState  = HcoState,                           &
-                             cName     = TRIM( DiagnName ),                  &
-                             ExtNr     = ExtNr,                              &
-                             Cat       = -1,                                 &
-                             Hier      = -1,                                 &
-                             HcoID     = -1,                                 &
-                             SpaceDim  = 2,                                  &
-                             LevIDx    = -1,                                 &
-                             OutUnit   = OutUnit,                            &
-                             OutOper   = OutOper,                            &
-                             COL       = HcoState%Diagn%HcoDiagnIDManual,    &
-                             AutoFill  = 1,                                  &
-                             RC        = RC                                 )
-
-          ! Trap potential errors
-          IF ( RC /= HCO_SUCCESS ) THEN
-             MSG = 'Could not define POPs diagnostic: '// TRIM( DiagnName )
-             CALL HCO_Error( Msg, RC, THISLOC=LOC )
-             RETURN
-          ENDIF
-       ENDDO
-
-    ENDIF
-
-  END SUBROUTINE Diagn_POPs
-!EOC
-!------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1171,7 +875,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Diagn_Hg( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+  SUBROUTINE Diagn_Hg( Input_Opt, HcoState, ExtState, RC )
 !
 ! !USES:
 !
@@ -1180,10 +884,6 @@ CONTAINS
     USE HCO_State_Mod,      ONLY : HCO_GetHcoID
     USE HCOX_State_Mod,     ONLY : Ext_State
     USE Input_Opt_Mod,      ONLY : OptInput
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,          INTENT(IN   )  :: am_I_Root  ! Are we on the root CPU?
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -1196,6 +896,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  23 Sep 2014 - C. Keller   - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1208,7 +909,7 @@ CONTAINS
     CHARACTER(LEN=255) :: LOC = 'DIAGN_Hg (hcoi_gc_diagn_mod.F90)'
 
     !=======================================================================
-    ! Define diagnostics (POPs emissions)
+    ! Define diagnostics (Hg emissions)
     !=======================================================================
 
     ! Assume success
@@ -1231,8 +932,7 @@ CONTAINS
     ! Create diagnostic container
     DiagnName = 'HG0_ARTISANAL'
     Cat       = 8
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM(DiagnName),                          &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1253,8 +953,7 @@ CONTAINS
     ! Create diagnostic container
     DiagnName = 'HG0_NATURAL'
     Cat       = CATEGORY_NATURAL
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM(DiagnName),                          &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1276,8 +975,7 @@ CONTAINS
 
     ! Create diagnostic container
     DiagnName = 'HG0_ANTHRO'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM(DiagnName),                          &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1298,8 +996,7 @@ CONTAINS
     ! Create diagnostic container
     IF ( HcoID > 0 ) THEN
        DiagnName = 'HG2_ANTHRO'
-       CALL Diagn_Create( am_I_Root,                                         &
-                          HcoState  = HcoState,                              &
+       CALL Diagn_Create( HcoState  = HcoState,                              &
                           cName     = TRIM(DiagnName),                       &
                           ExtNr     = ExtNr,                                 &
                           Cat       = Cat,                                   &
@@ -1321,8 +1018,7 @@ CONTAINS
     ! Create diagnostic container
     IF ( HcoID > 0 ) THEN
        DiagnName = 'HGP_ANTHRO'
-       CALL Diagn_Create( am_I_Root,                                         &
-                          HcoState  = HcoState,                              &
+       CALL Diagn_Create( HcoState  = HcoState,                              &
                           cName     = TRIM(DiagnName),                       &
                           ExtNr     = ExtNr,                                 &
                           Cat       = Cat,                                   &
@@ -1356,8 +1052,7 @@ CONTAINS
 
        ! Create diagnostic container
        DiagnName = 'BIOMASS_HG0'
-       CALL Diagn_Create( am_I_Root,                                         &
-                          HcoState  = HcoState,                              &
+       CALL Diagn_Create( HcoState  = HcoState,                              &
                           cName     = TRIM(DiagnName),                       &
                           ExtNr     = ExtNr,                                 &
                           Cat       = Cat,                                   &
@@ -1376,7 +1071,7 @@ CONTAINS
 !EOC
 #ifdef TOMAS
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1388,7 +1083,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Diagn_TOMAS( am_I_Root, Input_Opt, HcoState, ExtState, RC )
+  SUBROUTINE Diagn_TOMAS( Input_Opt, HcoState, ExtState, RC )
 !
 ! !USES:
 !
@@ -1399,10 +1094,6 @@ CONTAINS
     USE HCOX_State_Mod,     ONLY : Ext_State
     USE Input_Opt_Mod,      ONLY : OptInput
 !
-! !INPUT PARAMETERS:
-!
-    LOGICAL,          INTENT(IN   )  :: am_I_Root  ! Are we on the root CPU?
-!
 ! !INPUT/OUTPUT PARAMETERS:
 !
     TYPE(OptInput),   INTENT(INOUT)  :: Input_Opt  ! Input opts
@@ -1412,7 +1103,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  23 Sep 2014 - J. Kodros - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1450,8 +1141,7 @@ CONTAINS
     ExtNr     = 0
     Cat       = CATEGORY_ANTHRO
     DiagnName = 'BCPI_ANTH'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1477,8 +1167,7 @@ CONTAINS
     ExtNr     = 0
     Cat       = CATEGORY_ANTHRO
     DiagnName = 'BCPO_ANTH'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1504,8 +1193,7 @@ CONTAINS
     Extnr     = 0
     Cat       = CATEGORY_ANTHRO
     DiagnName = 'OCPI_ANTH'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1531,8 +1219,7 @@ CONTAINS
     ExtNr     = 0
     Cat       = CATEGORY_ANTHRO
     DiagnName = 'OCPO_ANTH'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1571,8 +1258,7 @@ CONTAINS
     ! %%%%% BPCI from BIOB (Category ? or species BCPI_bb)  %%%%%
     !-----------------------------------------------------------------
     DiagnName = 'BCPI_BB'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1596,8 +1282,7 @@ CONTAINS
     ! %%%%% BPCO from BIOB (Category ? or species BCPO_bb)  %%%%%
     !-----------------------------------------------------------------
     DiagnName = 'BCPO_BB'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1621,8 +1306,7 @@ CONTAINS
     ! %%%%% OCPI from BIOB (Category ? or species OCPI_bb)  %%%%%
     !-----------------------------------------------------------------
     DiagnName = 'OCPI_BB'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1646,8 +1330,7 @@ CONTAINS
     ! %%%%% OCPO from BIOB (Category ? or species OCPI_bb)  %%%%%
     !-----------------------------------------------------------------
     DiagnName = 'OCPO_BB'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1673,8 +1356,7 @@ CONTAINS
     ExtNr     = 0
     Cat       = CATEGORY_ANTHRO
     DiagnName = 'SO4_ANTH'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1700,8 +1382,7 @@ CONTAINS
     ExtNr     = 0
     Cat       = CATEGORY_ANTHRO
     DiagnName = 'CO_ANTH'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1738,8 +1419,7 @@ CONTAINS
 
     ! Create diagnostic container
     DiagnName = 'BIOGENIC_SOAS'
-    CALL Diagn_Create( am_I_Root,                                            &
-                       HcoState  = HcoState,                                 &
+    CALL Diagn_Create( HcoState  = HcoState,                                 &
                        cName     = TRIM( DiagnName ),                        &
                        ExtNr     = ExtNr,                                    &
                        Cat       = Cat,                                      &
@@ -1764,7 +1444,7 @@ CONTAINS
 !EOC
 #endif
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1804,6 +1484,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  20 Aug 2014 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC

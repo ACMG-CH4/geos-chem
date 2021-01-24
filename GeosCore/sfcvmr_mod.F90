@@ -1,5 +1,5 @@
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -34,7 +34,6 @@ MODULE SfcVmr_Mod
 !
   USE PhysConstants       ! Physical constants
   USE Precision_Mod       ! For GEOS-Chem Precision (fp)
-  USE HCO_Error_Mod       ! HEMCO error handling variables & functions
 
   IMPLICIT NONE
   PRIVATE
@@ -50,7 +49,7 @@ MODULE SfcVmr_Mod
 !
 ! !REVISION HISTORY:
 !  24 Dec 2016 - S. D. Eastham - Initial version.
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -73,7 +72,7 @@ MODULE SfcVmr_Mod
 CONTAINS
 !EOC
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -94,7 +93,7 @@ CONTAINS
     USE State_Chm_Mod,      ONLY : ChmState
     USE State_Grid_Mod,     ONLY : GrdState
     USE Species_Mod,        ONLY : Species
-    USE HCO_Interface_Mod,  ONLY : HcoState
+    USE HCO_State_GC_Mod,   ONLY : HcoState
     USE HCO_Calc_Mod,       ONLY : HCO_EvalFld
 !
 ! !INPUT PARAMETERS:
@@ -113,7 +112,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  16 Aug 2019 - C. Keller   - Updated version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -130,7 +129,7 @@ CONTAINS
     CHARACTER(LEN=255)      :: ThisLoc
 
     ! Arrays
-    REAL(hp)                :: Arr2D(State_Grid%NX,State_Grid%NY)
+    REAL(fp)                :: Arr2D(State_Grid%NX,State_Grid%NY)
 
     ! Pointers
     TYPE(Species),  POINTER :: SpcInfo
@@ -141,7 +140,7 @@ CONTAINS
     !=================================================================
 
     ! Initialize
-    RC        = HCO_SUCCESS
+    RC        = GC_SUCCESS
     ErrMsg    = ''
     ThisLoc   = ' --> at fixSfcVMR_Init (in module GeosCore/sfcvmr_mod.F90)'
     iSfcMrObj => NULL()
@@ -163,9 +162,8 @@ CONTAINS
 
        ! Check if file exists
        FldName = TRIM( Prefix ) // TRIM( SpcInfo%Name )
-       CALL HCO_EvalFld( Input_Opt%amIRoot, HcoState, TRIM(FldName),         &
-                         Arr2D,             RC,       FOUND=FOUND           )
-       IF ( RC /= HCO_SUCCESS ) THEN
+       CALL HCO_EvalFld( HcoState, TRIM(FldName), Arr2D, RC, FOUND=FOUND )
+       IF ( RC /= GC_SUCCESS ) THEN
           ErrMsg = 'Could not find field : ' // TRIM( FldName )
           CALL GC_Error( ErrMsg, RC, ThisLoc )
           RETURN
@@ -175,7 +173,7 @@ CONTAINS
        IF ( FOUND ) THEN
 
            ! Must have positive, non-zero MW
-           IF ( SpcInfo%emMW_g <= 0.0_fp ) THEN
+           IF ( SpcInfo%MW_g <= 0.0_fp ) THEN
               ErrMsg = 'Cannot use surface boundary condition for species '  &
                      // TRIM(SpcInfo%Name) // ' due to invalid MW!'
               CALL GC_Error( ErrMsg, RC, ThisLoc )
@@ -185,7 +183,7 @@ CONTAINS
            ! Create new object, add to list
            ALLOCATE( iSfcMrObj, STAT=RC )
            CALL GC_CheckVar( 'sfcvmr_mod.F90:iSfcMrObj', 0, RC )
-           IF ( RC /= HCO_SUCCESS ) RETURN
+           IF ( RC /= GC_SUCCESS ) RETURN
 
            iSfcMrObj%SpcID   =  N
            iSfcMrObj%FldName =  TRIM(Prefix)//TRIM(SpcInfo%Name)
@@ -202,14 +200,11 @@ CONTAINS
        ENDIF
 
        ! Indicate success
-       RC = HCO_SUCCESS
+       RC = GC_SUCCESS
     ENDDO
 
-    ! Exit if unsuccessful
-    IF ( RC /= HCO_SUCCESS ) RETURN
-
     ! If successful, print message
-    IF ( Input_Opt%amIRoot ) THEN
+    IF ( Input_Opt%amIRoot .AND. RC == GC_SUCCESS) THEN
        WRITE( 6, 120 )
  120   FORMAT( '--- Finished initializing surface boundary conditions ---' )
     ENDIF
@@ -217,7 +212,7 @@ CONTAINS
   END SUBROUTINE fixSfcVMR_Init
 !EOC
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -234,18 +229,15 @@ CONTAINS
 ! !USES:
 !
     USE ErrCode_Mod
-    USE Input_Opt_Mod,      ONLY : OptInput
-    USE State_Met_Mod,      ONLY : MetState
-    USE State_Chm_Mod,      ONLY : ChmState
-    USE State_Grid_Mod,     ONLY : GrdState
-    USE State_Chm_Mod,      ONLY : Ind_
-    USE Species_Mod,        ONLY : Species
-    USE HCO_Interface_Mod,  ONLY : HcoState
-    USE HCO_Calc_Mod,       ONLY : Hco_EvalFld
-    USE HCO_Error_Mod,      ONLY : HCO_SUCCESS
-    USE TIME_MOD,           ONLY : Get_Month
-    USE HCO_INTERFACE_MOD,  ONLY : HcoState
-    USE HCO_STATE_MOD,      ONLY : HCO_GetHcoID
+    USE Input_Opt_Mod,    ONLY : OptInput
+    USE State_Met_Mod,    ONLY : MetState
+    USE State_Chm_Mod,    ONLY : ChmState
+    USE State_Grid_Mod,   ONLY : GrdState
+    USE State_Chm_Mod,    ONLY : Ind_
+    USE Species_Mod,      ONLY : Species
+    USE HCO_State_GC_Mod, ONLY : HcoState
+    USE HCO_Calc_Mod,     ONLY : Hco_EvalFld
+    USE TIME_MOD,         ONLY : Get_Month
 
     ! Needed for the new CHxCly boundary condition
     Use PhysConstants,      Only : AirMW
@@ -263,7 +255,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  27 Aug 2014 - C. Keller   - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -282,7 +274,7 @@ CONTAINS
     CHARACTER(LEN=255)       :: ThisLoc
 
     ! Arrays
-    REAL(hp)                 :: Arr2D(State_Grid%NX,State_Grid%NY)
+    REAL(fp)                 :: Arr2D(State_Grid%NX,State_Grid%NY)
 
     ! Linked list
     Real(fp),       POINTER  :: Spc(:,:,:,:)   ! Ptr to species array
@@ -294,14 +286,14 @@ CONTAINS
     !=======================================================================
 
     ! Assume success
-    RC        = HCO_SUCCESS
+    RC        = GC_SUCCESS
     ErrMsg    = ''
     ThisLoc   = ' -> at FixSfcVmrRun (in module GeosCore/sfcvmr_mod.F90)'
 
     ! Initialize object if needed
     IF ( FIRST ) THEN
        CALL FixSfcVMR_Init( Input_Opt, State_Chm, State_Grid, State_Met, RC )
-       IF ( RC /= HCO_SUCCESS ) THEN
+       IF ( RC /= GC_SUCCESS ) THEN
           ErrMsg = 'Error encountered in routine "FixSfcVmrInit"!'
           CALL GC_Error( ErrMsg, RC, ThisLoc )
           RETURN
@@ -319,9 +311,8 @@ CONTAINS
     DO WHILE( ASSOCIATED( iObj ) )
 
        ! Get concentration for this species
-       CALL HCO_EvalFld( Input_Opt%amIRoot,  HcoState,                       &
-                         Trim(iObj%FldName), Arr2D,    RC                   )
-       IF ( RC /= HCO_SUCCESS ) THEN
+       CALL HCO_EvalFld( HcoState, Trim(iObj%FldName), Arr2D, RC )
+       IF ( RC /= GC_SUCCESS ) THEN
           ErrMsg = 'Could not get surface VMR for species: '//               &
                    TRIM( iObj%FldName ) // '!'
           CALL GC_Error( ErrMsg, RC, ThisLoc )
@@ -338,7 +329,7 @@ CONTAINS
           DO I = 1, State_Grid%NX
              IF ( State_Met%F_UNDER_PBLTOP(I,J,L) > 0.0_fp ) THEN
                 Spc(I,J,L,id_Spc) = ( Arr2d(I,J) * 1.0e-9_fp      )          &
-                                  / ( AIRMW      / SpcInfo%emMW_g )
+                                  / ( AIRMW      / SpcInfo%MW_g   )
              ENDIF  ! end selection of PBL boxes
           ENDDO
           ENDDO
@@ -356,7 +347,7 @@ CONTAINS
   END SUBROUTINE FixSfcVmr_Run
 !EOC
 !------------------------------------------------------------------------------
-!                  Harvard-NASA Emissions Component (HEMCO)                   !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -379,7 +370,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  16 Aug 2019 - C. Keller   - Updated version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC

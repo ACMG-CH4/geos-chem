@@ -34,13 +34,13 @@ MODULE GC_Grid_Mod
 #endif
   PUBLIC  :: GET_IJ
   PUBLIC  :: SetGridFromCtr
-#ifdef MODEL_WRF
+#if defined ( MODEL_WRF ) || defined( MODEL_CESM )
   PUBLIC  :: SetGridFromCtrEdges
 #endif
 !
 ! !REVISION HISTORY:
-!  23 Feb 2012 - R. Yantosca - Initial version, based on grid_mod.F
-!  See the Git history with the gitk browser!
+!  23 Feb 2012 - R. Yantosca - Initial version, based on grid_mod.F90
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -61,7 +61,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Compute_Grid( am_I_Root, Input_Opt, State_Grid, RC )
+  SUBROUTINE Compute_Grid( Input_Opt, State_Grid, RC )
 !
 ! !USES:
 !
@@ -70,7 +70,6 @@ CONTAINS
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,        INTENT(IN)    :: am_I_Root         ! Root CPU?
     TYPE(OptInput), INTENT(IN)    :: Input_Opt         ! Input Options
 !
 ! !INPUT/OUTPUT PARAMETERS:
@@ -87,7 +86,7 @@ CONTAINS
 !  22 May 2019 - M. Sulprizio- Initial version: Consolidated Compute_Grid and
 !                              DoGridComputation into single routine that
 !                              computes fields in State_Grid.
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -119,13 +118,18 @@ CONTAINS
     State_Grid%NativeNZ = 72
 
     ! Hardcode maximum number of levels below tropopause and stratopause
-    ! (formerly set in CMN_SIZE_mod.F)
     IF ( State_Grid%NZ == 47 ) THEN
        State_Grid%MaxTropLev  = 38
        State_Grid%MaxStratLev = 44
     ELSE IF ( State_Grid%NZ == 72 ) THEN
        State_Grid%MaxTropLev  = 40
        State_Grid%MaxStratLev = 59
+    ELSE
+       ErrMsg = 'State_Grid%GridRes = ' // Trim( State_Grid%GridRes)// &
+                ' does not have MaxTropLev and MaxStratLev defined.'// &
+                ' Please add these definitions in gc_grid_mod.F90.'
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
     ENDIF
 
     ! Set maximum number of levels in the chemistry grid
@@ -432,7 +436,7 @@ CONTAINS
     !======================================================================
     ! Echo info to stdout
     !======================================================================
-    IF ( am_I_Root ) THEN
+    IF ( Input_Opt%amIRoot ) THEN
        WRITE( 6, '(a)' )
        WRITE( 6, '(''%%%%%%%%%%%%%%% GLOBAL GRID %%%%%%%%%%%%%%%'')' )
        WRITE( 6, '(a)' )
@@ -489,16 +493,17 @@ CONTAINS
 ! initialization phase (they are imported from superdynamics).
 ! !INTERFACE:
 !
-  SUBROUTINE SetGridFromCtr( am_I_Root,  State_Grid, lonCtr, latCtr, RC )
+  SUBROUTINE SetGridFromCtr( Input_Opt, State_Grid, lonCtr, latCtr, RC )
 !
 ! USES
 !
     USE ErrCode_Mod
+    USE Input_Opt_Mod, ONLY : OptInput
     USE Roundoff_Mod
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,        INTENT(IN)    :: am_I_Root      ! Root CPU?
+    TYPE(OptInput), INTENT(IN)    :: Input_Opt      ! Input Options object
     REAL(f4),       INTENT(IN)    :: lonCtr(:,:)    ! Lon ctrs [rad]
     REAL(f4),       INTENT(IN)    :: latCtr(:,:)    ! Lat ctrs [rad]
     TYPE(GrdState), INTENT(IN)    :: State_Grid     ! Grid State object
@@ -509,7 +514,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  02 Jan 2014 - C. Keller   - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -542,33 +547,59 @@ CONTAINS
        State_Grid%YMid_R(I,J) = State_Grid%YMid(I,J) * PI_180
 
        ! Edges: approximate from neighboring mid points.
-       IF ( I == 1 ) THEN
-          TMP = RoundOff( lonCtr(I+1,J) / PI_180, 4 )
-          State_Grid%XEdge(I,J) = State_Grid%XMid(I,J) - &
-                                  ( ( TMP - State_Grid%XMid(I,J) ) / 2.0_f4 )
+#if defined( MODEL_CESM )
+       ! If using CESM, prevent out-of-bound errors when running with
+       ! NX or NY equal to 1
+       IF ( State_Grid%NX > 1 ) THEN
+#endif
+           IF ( I == 1 ) THEN
+              TMP = RoundOff( lonCtr(I+1,J) / PI_180, 4 )
+              State_Grid%XEdge(I,J) = State_Grid%XMid(I,J) - &
+                                      ( ( TMP - State_Grid%XMid(I,J) ) / 2.0_f4 )
+           ELSE
+              State_Grid%XEdge(I,J) = ( State_Grid%XMid(I,J) + &
+                                          State_Grid%XMid(I-1,J) ) / 2.0_f4
+           ENDIF
+#if defined( MODEL_CESM )
        ELSE
-          State_Grid%XEdge(I,J) = ( State_Grid%XMid(I,J) + &
-                                      State_Grid%XMid(I-1,J) ) / 2.0_f4
+           State_Grid%XEdge(I,J) = State_Grid%XMid(I,J)
        ENDIF
 
-       IF ( J == 1 ) THEN
-          TMP = RoundOff( latCtr(I,J+1) / PI_180, 4 )
-          State_Grid%YEdge(I,J) = State_Grid%YMid(I,J) - &
-                                  ( ( TMP - State_Grid%YMid(I,J) ) / 2.0_f4 )
+       IF ( State_Grid%NY > 1 ) THEN
+#endif
+           IF ( J == 1 ) THEN
+              TMP = RoundOff( latCtr(I,J+1) / PI_180, 4 )
+              State_Grid%YEdge(I,J) = State_Grid%YMid(I,J) - &
+                                      ( ( TMP - State_Grid%YMid(I,J) ) / 2.0_f4 )
+           ELSE
+              State_Grid%YEdge(I,J) = ( State_Grid%YMid(I,J) + &
+                                          State_Grid%YMid(I,J-1) ) / 2.0_f4
+           ENDIF
+#if defined( MODEL_CESM )
        ELSE
-          State_Grid%YEdge(I,J) = ( State_Grid%YMid(I,J) + &
-                                      State_Grid%YMid(I,J-1) ) / 2.0_f4
+           State_Grid%YEdge(I,J) = State_Grid%YMid(I,J)
        ENDIF
+#endif
 
        ! Special treatment at uppermost edge
-       IF ( I == State_Grid%NX ) THEN
-          State_Grid%XEdge(I+1,J) = State_Grid%XMid(I,J) + &
-             ( ( State_Grid%XMid(I,J) - State_Grid%XMid(I-1,J) ) / 2.0_f4 )
+#if defined( MODEL_CESM )
+       IF ( State_Grid%NX > 1 ) THEN
+#endif
+           IF ( I == State_Grid%NX ) THEN
+              State_Grid%XEdge(I+1,J) = State_Grid%XMid(I,J) + &
+                 ( ( State_Grid%XMid(I,J) - State_Grid%XMid(I-1,J) ) / 2.0_f4 )
+           ENDIF
+#if defined( MODEL_CESM )
        ENDIF
-       IF ( J == State_Grid%NY ) THEN
-          State_Grid%YEdge(I,J+1) = State_Grid%YMid(I,J) + &
-             ( ( State_Grid%YMid(I,J) - State_Grid%YMid(I,J-1) ) / 2.0_f4 )
+       IF ( State_Grid%NY > 1 ) THEN
+#endif
+           IF ( J == State_Grid%NY ) THEN
+              State_Grid%YEdge(I,J+1) = State_Grid%YMid(I,J) + &
+                 ( ( State_Grid%YMid(I,J) - State_Grid%YMid(I,J-1) ) / 2.0_f4 )
+           ENDIF
+#if defined( MODEL_CESM )
        ENDIF
+#endif
 
        ! Special quantities directly derived from State_Grid%YEdge
        State_Grid%YEdge_R(I,J) = State_Grid%YEdge(I,J) * PI_180
@@ -584,7 +615,7 @@ CONTAINS
 
   END SUBROUTINE SetGridFromCtr
 !EOC
-#ifdef MODEL_WRF
+#if defined ( MODEL_WRF ) || defined( MODEL_CESM )
 !------------------------------------------------------------------------------
 !                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
@@ -594,7 +625,7 @@ CONTAINS
 !
 ! !DESCRIPTION: Subroutine SetGridFromCtrEdges sets the grid based upon the
 !  passed mid-points and edge-points given an external grid. This interface
-!  is primarily used for GEOS-Chem to interface with the WRF model.
+!  is primarily used for GEOS-Chem to interface with the WRF and CESM models.
 !\\
 !\\
 ! This routine does not update the grid box areas (AREA\_M2) of grid\_mod.F90.
@@ -602,17 +633,18 @@ CONTAINS
 ! consistency with the GEOS-Chem interface to GEOS-5.
 ! !INTERFACE:
 !
-  SUBROUTINE SetGridFromCtrEdges( am_I_Root, State_Grid, lonCtr, latCtr, &
+  SUBROUTINE SetGridFromCtrEdges( Input_Opt, State_Grid, lonCtr, latCtr, &
                                   lonEdge, latEdge, RC )
 !
 ! USES
 !
     USE ErrCode_Mod
+    USE Input_Opt_Mod, ONLY : OptInput
     USE Roundoff_Mod
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,        INTENT(IN)    :: am_I_Root      ! Root CPU?
+    TYPE(OptInput), INTENT(IN)    :: Input_Opt      ! Input Options object
     REAL(f4),       INTENT(IN)    :: lonCtr (:,:)   ! Lon ctrs [rad]
     REAL(f4),       INTENT(IN)    :: latCtr (:,:)   ! Lat ctrs [rad]
     REAL(f4),       INTENT(IN)    :: lonEdge(:,:)   ! Lon edges [rad]
@@ -625,7 +657,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  11 Nov 2018 - H.P. Lin    - Initial version based on SetGridFromCtr
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -704,7 +736,6 @@ CONTAINS
 !
 ! !USES:
 !
-    USE CMN_SIZE_MOD
     USE ERROR_MOD,      ONLY : ERROR_STOP
     USE State_Grid_Mod, ONLY : GrdState
 !
@@ -719,7 +750,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  16 Jun 2017 - M. Sulprizio- Initial version based on routine from adjoint
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC

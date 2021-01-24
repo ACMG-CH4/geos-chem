@@ -21,9 +21,12 @@ MODULE State_Met_Mod
 !
 ! USES:
 !
+  USE Cmn_Size_Mod, ONLY : NSURFTYPE
+  USE Dictionary_M, ONLY : dictionary_t
   USE ErrCode_Mod
   USE Precision_Mod
   USE Registry_Mod
+
 
   IMPLICIT NONE
   PRIVATE
@@ -36,7 +39,9 @@ MODULE State_Met_Mod
 !
 ! !PRIVATE MEMBER FUNCTIONS:
 !
+  PRIVATE :: Init_and_Register
   PRIVATE :: Register_MetField
+  PRIVATE :: Zero_State_Met
 !
 ! !PUBLIC DATA MEMBERS:
 !
@@ -66,6 +71,10 @@ MODULE State_Met_Mod
      REAL(fp), POINTER :: GWETROOT      (:,:  ) ! Root soil wetness [1]
      REAL(fp), POINTER :: GWETTOP       (:,:  ) ! Top soil moisture [1]
      REAL(fp), POINTER :: HFLUX         (:,:  ) ! Sensible heat flux [W/m2]
+     LOGICAL,  POINTER :: IsLand        (:,:  ) ! Is this a land  grid box?
+     LOGICAL,  POINTER :: IsWater       (:,:  ) ! Is this a water grid box?
+     LOGICAL,  POINTER :: IsIce         (:,:  ) ! Is this a ice   grid box?
+     LOGICAL,  POINTER :: IsSnow        (:,:  ) ! Is this a snow  grid box?
      REAL(fp), POINTER :: LAI           (:,:  ) ! Leaf area index [m2/m2]
                                                 !  (online)
      REAL(fp), POINTER :: LWI           (:,:  ) ! Land/water indices [1]
@@ -214,11 +223,6 @@ MODULE State_Met_Mod
      REAL(fp), POINTER :: SPHU_PREV     (:,:,:) ! Previous State_Met%SPHU
 
      !----------------------------------------------------------------------
-     ! Age of air for diagnosing transport
-     !----------------------------------------------------------------------
-     INTEGER,  POINTER :: AgeOfAir      (:,:,:) ! Age of air [s]
-
-     !----------------------------------------------------------------------
      ! Offline land type, leaf area index, and chlorophyll fields
      !----------------------------------------------------------------------
      INTEGER,  POINTER :: IREG          (:,:  ) ! # of landtypes in box (I,J)
@@ -251,8 +255,22 @@ MODULE State_Met_Mod
                                                 !  and 13 local solar time?
 
      !----------------------------------------------------------------------
-     ! Scalars
+     ! Fields for wet scavenging module
      !----------------------------------------------------------------------
+     REAL(fp), POINTER :: C_H2O         (:,:,:) ! Mix ratio of H2O [v/v]
+     REAL(fp), POINTER :: CLDICE        (:,:,:) ! Cloud ice mixing ratio [cm3 ice/cm3 air]
+     REAL(fp), POINTER :: CLDLIQ        (:,:,:) ! Cloud liquid water mixing ratio [cm3 H2O/cm3 air]
+     REAL(fp), POINTER :: PDOWN         (:,:,:) ! Precipitation thru the bottom of the grid box
+                                                ! [cm3 H2O/cm2 area/s]
+     REAL(fp), POINTER :: QQ            (:,:,:) ! Rate of new precip formation [cm3 H2O/cm3 air/s]
+     REAL(fp), POINTER :: REEVAP        (:,:,:) ! Rate of precip reevaporation
+     REAL(fp), POINTER :: PSO4_SO2APM2  (:,:,:)
+
+     !----------------------------------------------------------------------
+     ! Fields for boundary layer mixing
+     !----------------------------------------------------------------------
+     INTEGER,  POINTER :: IMIX          (:,:  ) ! Integer and fractional level
+     REAL(fp), POINTER :: FPBL          (:,:  ) !  where PBL top occurs
      INTEGER           :: PBL_MAX_L             ! Max level where PBL top occurs
 
      !----------------------------------------------------------------------
@@ -260,6 +278,7 @@ MODULE State_Met_Mod
      !----------------------------------------------------------------------
      CHARACTER(LEN=3)             :: State     = 'MET'    ! Name of this state
      TYPE(MetaRegItem), POINTER   :: Registry  => NULL()  ! Registry object
+     TYPE(dictionary_t)           :: RegDict              ! Reg. lookup table
 
   END TYPE MetState
 !
@@ -268,16 +287,29 @@ MODULE State_Met_Mod
 !
 ! !REVISION HISTORY:
 !  19 Oct 2012 - R. Yantosca - Initial version, split off from gc_type_mod.F90
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 !
 ! !MODULE INTERFACES:
 !
+  INTERFACE Init_and_Register
+     MODULE PROCEDURE Init_and_Register_R4_2D
+     MODULE PROCEDURE Init_and_Register_R4_3D
+     MODULE PROCEDURE Init_and_Register_R8_2D
+     MODULE PROCEDURE Init_and_Register_R8_3D
+     MODULE PROCEDURE Init_and_Register_Log_2D
+     MODULE PROCEDURE Init_and_Register_Log_3D
+     MODULE PROCEDURE Init_and_Register_Int_2D
+     MODULE PROCEDURE Init_and_Register_Int_3D
+  END INTERFACE Init_and_Register
+
   INTERFACE Register_MetField
-     MODULE PROCEDURE Register_MetField_Rfp_2D
-     MODULE PROCEDURE Register_MetField_Rfp_3D
+     MODULE PROCEDURE Register_MetField_R4_2D
+     MODULE PROCEDURE Register_MetField_R4_3D
+     MODULE PROCEDURE Register_MetField_R8_2D
+     MODULE PROCEDURE Register_MetField_R8_3D
      MODULE PROCEDURE Register_MetField_Int_2D
      MODULE PROCEDURE Register_MetField_Int_3D
   END INTERFACE Register_MetField
@@ -289,67 +321,36 @@ CONTAINS
 !------------------------------------------------------------------------------
 !BOP
 !
-! !IROUTINE: Init_State_Met
+! !IROUTINE: Zero_State_Met
 !
-! !DESCRIPTION: Subroutine INIT\_STATE\_MET allocates all fields of
-!  the meteorology state object.
+! !DESCRIPTION: Nullifies and/or zeroes all fields of State\_Met.
 !\\
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Init_State_Met( am_I_Root, Input_Opt, State_Grid, State_Met, RC )
-!
-! !USES:
-!
-    USE CMN_SIZE_MOD,   ONLY : NSURFTYPE
-    USE Input_Opt_Mod,  ONLY : OptInput
-    USE State_Grid_Mod, ONLY : GrdState
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,        INTENT(IN)    :: am_I_Root   ! Is this the root CPU?
-    TYPE(OptInput), INTENT(IN)    :: Input_Opt   ! Input Options object
-    TYPE(GrdState), INTENT(IN)    :: State_Grid  ! Grid State object
+  SUBROUTINE Zero_State_Met( State_Met, RC )
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
-    TYPE(MetState), INTENT(INOUT) :: State_Met   ! Obj for meteorology state
+    TYPE(MetState), INTENT(INOUT) :: State_Met
 !
 ! !OUTPUT PARAMETERS:
 !
-    INTEGER,        INTENT(OUT)   :: RC          ! Return code
-!
-! !REMARKS:
-!  For consistency, maybe this should be moved to a different module.
+    INTEGER,        INTENT(OUT)   :: RC
 !
 ! !REVISION HISTORY:
-!  19 Oct 2012 - R. Yantosca - Initial version, based on gc_environment_mod.F90
-!  See the Git history with the gitk browser!
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 !
-! !LOCAL VARIABLES:
-!
-    ! Scalars
-    INTEGER            :: LX, IM, JM, LM
-
-    ! Strings
-    CHARACTER(LEN=255) :: ErrMsg, ThisLoc
-
-    !=======================================================================
     ! Initialize
-    !=======================================================================
-    RC      =  GC_SUCCESS
-    ThisLoc = ' -> Init_State_Met (in Headers/state_met_mod.F90)'
-
-    ! Shorten grid parameters for readability
-    IM = State_Grid%NX ! # latitudes
-    JM = State_Grid%NY ! # longitudes
-    LM = State_Grid%NZ ! # levels
+    RC = GC_SUCCESS
 
     !=======================================================================
     ! Nullify all fields for safety's sake before allocating them
+    ! This can prevent compilation errors caused by uninitialized values
     !=======================================================================
     State_Met%ALBD           => NULL()
     State_Met%AREA_M2        => NULL()
@@ -366,11 +367,13 @@ CONTAINS
     State_Met%FROCEAN        => NULL()
     State_Met%FRSEAICE       => NULL()
     State_Met%FRSNO          => NULL()
-    State_Met%F_OF_PBL       => NULL()
-    State_Met%F_UNDER_PBLTOP => NULL()
     State_Met%GWETROOT       => NULL()
     State_Met%GWETTOP        => NULL()
     State_Met%HFLUX          => NULL()
+    State_Met%IsLand         => NULL()
+    State_Met%IsWater        => NULL()
+    State_Met%IsIce          => NULL()
+    State_Met%IsSnow         => NULL()
     State_Met%LAI            => NULL()
     State_Met%LWI            => NULL()
     State_Met%PARDR          => NULL()
@@ -386,10 +389,10 @@ CONTAINS
     State_Met%PRECLSC        => NULL()
     State_Met%PRECTOT        => NULL()
     State_Met%PS1_WET        => NULL()
-    State_Met%PS1_DRY        => NULL()
     State_Met%PS2_WET        => NULL()
-    State_Met%PS2_DRY        => NULL()
     State_Met%PSC2_WET       => NULL()
+    State_Met%PS1_DRY        => NULL()
+    State_Met%PS2_DRY        => NULL()
     State_Met%PSC2_DRY       => NULL()
     State_Met%SEAICE00       => NULL()
     State_Met%SEAICE10       => NULL()
@@ -407,46 +410,32 @@ CONTAINS
     State_Met%SUNCOS         => NULL()
     State_Met%SUNCOSmid      => NULL()
     State_Met%SWGDN          => NULL()
+    State_Met%TO3            => NULL()
+    State_Met%TROPP          => NULL()
     State_Met%TropLev        => NULL()
     State_Met%TropHt         => NULL()
-    State_Met%TROPP          => NULL()
     State_Met%TS             => NULL()
     State_Met%TSKIN          => NULL()
-    State_Met%TO3            => NULL()
     State_Met%U10M           => NULL()
     State_Met%USTAR          => NULL()
     State_Met%UVALBEDO       => NULL()
     State_Met%V10M           => NULL()
     State_Met%Z0             => NULL()
     State_Met%CNV_FRC        => NULL()
-    State_Met%ILAND          => NULL()
-    State_Met%IREG           => NULL()
-    State_Met%IUSE           => NULL()
-    State_Met%LANDTYPEFRAC   => NULL()
-    State_Met%MODISLAI       => NULL()
-    State_Met%AD             => NULL()
-    State_Met%AIRDEN         => NULL()
-    State_Met%MAIRDEN        => NULL()
-    State_Met%AIRVOL         => NULL()
-    State_Met%BXHEIGHT       => NULL()
     State_Met%CLDF           => NULL()
     State_Met%CMFMC          => NULL()
-    State_Met%DELP           => NULL()
-    State_Met%DELP_DRY       => NULL()
-    State_Met%DP_DRY_PREV    => NULL()
     State_Met%DQRCU          => NULL()
     State_Met%DQRLSAN        => NULL()
     State_Met%DTRAIN         => NULL()
+    State_Met%F_OF_PBL       => NULL()
+    State_Met%F_UNDER_PBLTOP => NULL()
     State_Met%OMEGA          => NULL()
     State_Met%OPTD           => NULL()
     State_Met%PEDGE          => NULL()
-    State_Met%PEDGE_DRY      => NULL()
     State_Met%PFICU          => NULL()
     State_Met%PFILSAN        => NULL()
     State_Met%PFLCU          => NULL()
     State_Met%PFLLSAN        => NULL()
-    State_Met%PMID           => NULL()
-    State_Met%PMID_DRY       => NULL()
     State_Met%QI             => NULL()
     State_Met%QL             => NULL()
     State_Met%REEVAPCN       => NULL()
@@ -456,1465 +445,2741 @@ CONTAINS
     State_Met%SPHU1          => NULL()
     State_Met%SPHU2          => NULL()
     State_Met%T              => NULL()
-    State_Met%TMPU1          => NULL()
-    State_Met%TMPU2          => NULL()
-    State_Met%TV             => NULL()
     State_Met%TAUCLI         => NULL()
     State_Met%TAUCLW         => NULL()
+    State_Met%TMPU1          => NULL()
+    State_Met%TMPU2          => NULL()
     State_Met%U              => NULL()
     State_Met%UPDVVEL        => NULL()
     State_Met%V              => NULL()
+    State_Met%PEDGE_DRY      => NULL()
+    State_Met%PMID           => NULL()
+    State_Met%PMID_DRY       => NULL()
+    State_Met%THETA          => NULL()
+    State_Met%TV             => NULL()
+    State_Met%MAIRDEN        => NULL()
+    State_Met%AIRDEN         => NULL()
+    State_Met%AIRNUMDEN      => NULL()
+    State_Met%AVGW           => NULL()
+    State_Met%BXHEIGHT       => NULL()
+    State_Met%DELP           => NULL()
+    State_Met%DELP_DRY       => NULL()
+    State_Met%AD             => NULL()
+    State_Met%AIRVOL         => NULL()
+    State_Met%DP_DRY_PREV    => NULL()
+    State_Met%SPHU_PREV      => NULL()
+    State_Met%IREG           => NULL()
+    State_Met%ILAND          => NULL()
+    State_Met%IUSE           => NULL()
+    State_Met%MODISLAI       => NULL()
     State_Met%XLAI           => NULL()
+    State_Met%LandTypeFrac   => NULL()
     State_Met%XLAI_NATIVE    => NULL()
+    State_Met%XLAI2          => NULL()
     State_Met%InChemGrid     => NULL()
     State_Met%InPbl          => NULL()
     State_Met%InStratMeso    => NULL()
     State_Met%InStratosphere => NULL()
     State_Met%InTroposphere  => NULL()
-    State_Met%IsLocalNoon    => NULL()
     State_Met%LocalSolarTime => NULL()
-    State_Met%AgeOfAir       => NULL()
+    State_Met%IsLocalNoon    => NULL()
+    State_Met%C_H2O          => NULL()
+    State_Met%CLDICE         => NULL()
+    State_Met%CLDLIQ         => NULL()
+    State_Met%PDOWN          => NULL()
+    State_Met%QQ             => NULL()
+    State_Met%REEVAP         => NULL()
+    State_Met%IMIX           => NULL()
+    State_Met%FPBL           => NULL()
+    State_Met%REEVAP         => NULL()
+    State_Met%PSO4_SO2APM2   => NULL()
+    State_Met%PBL_MAX_L      = 0
+
+  END SUBROUTINE Zero_State_Met
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Init_State_Met
+!
+! !DESCRIPTION: Subroutine INIT\_STATE\_MET allocates all fields of
+!  the meteorology state object.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Init_State_Met( Input_Opt, State_Grid, State_Met, RC )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput), INTENT(IN)    :: Input_Opt   ! Input Options object
+    TYPE(GrdState), INTENT(IN)    :: State_Grid  ! Grid State object
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    TYPE(MetState), INTENT(INOUT) :: State_Met   ! Obj for meteorology state
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,        INTENT(OUT)   :: RC          ! Return code
+!
+! !REMARKS:
+!  For consistency, maybe this should be moved to a different module.
+!
+! !REVISION HISTORY:
+!  19 Oct 2012 - R. Yantosca - Initial version, based on gc_environment_mod.F90
+!  See https://github.com/geoschem/geos-chem for complete history
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Strings
+    CHARACTER(LEN=255) :: errMsg_ir, thisLoc, metId
+    CHARACTER(LEN=512) :: errMsg
 
     !=======================================================================
-    ! Exit if this is a dry-run simulation
+    ! Initialize
     !=======================================================================
+    RC      =  GC_SUCCESS
+    errMsg     =  ''
+    errMsg_ir  =  'Error encountered in "Init_and_Register", metId = '
+    thisLoc    =  &
+         ' -> at Init_State_Met (in module Headers/state_met_mod.F90)'
+
+    ! Nullify or zero all State_Met variables
+    CALL Zero_State_Met( State_Met, RC )
+
+    !========================================================================
+    ! Exit if this is a dry-run simulation
+    !========================================================================
     IF ( Input_Opt%DryRun ) THEN
        RC = GC_SUCCESS
        RETURN
     ENDIF
 
-    !=======================================================================
+    !========================================================================
     ! Allocate 2-D Fields
-    !=======================================================================
+    !========================================================================
 
-    !-------------------------
+    !------------------------------------------------------------------------
     ! ALBD [1]
-    !-------------------------
-    ALLOCATE( State_Met%ALBD( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%ALBD', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%ALBD = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'ALBD', State_Met%ALBD, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'ALBD'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%ALBD,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! AREA_M2 [m2]
-    !-------------------------
-    ALLOCATE( State_Met%AREA_M2( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%AREA_M2', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%AREA_M2 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'AREAM2', State_Met%AREA_M2, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'AREAM2'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%AREA_M2,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! ChemGridLev [1]
-    !-------------------------
-    ALLOCATE( State_Met%ChemGridLev( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%ChemGridLev', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%ChemGridLev = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'CHEMGRIDLEV',  &
-                            State_Met%ChemGridLev,     &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'ChemGridLev'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%ChemGridLev,                                 &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! CLDFRC [1]
-    !-------------------------
-    ALLOCATE( State_Met%CLDFRC( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%CLDFRC', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%CLDFRC = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'CLDFRC', State_Met%CLDFRC, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'CLDFRC'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%CLDFRC,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! CLDTOPS [level]
-    !-------------------------
-    ALLOCATE( State_Met%CLDTOPS( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%CLDTOPS', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%CLDTOPS = 0
-    CALL Register_MetField( am_I_Root, 'CLDTOPS', State_Met%CLDTOPS, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'CLDTOPS'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%CLDTOPS,                                     &
+         RC         = RC                                                    )
 
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+#ifdef MODEL_GEOS
+    !------------------------------------------------------------------------
+    ! CNV_FRC [1]
     ! Convective fractions are not yet a standard GEOS-FP
     ! field. Only available to online model (ckeller, 3/4/16)
-#if defined( ESMF_ ) || defined( MODEL_ )
-    !-------------------------
-    ! CNV_FRC [1]
-    !-------------------------
-    ALLOCATE( State_Met%CNV_FRC( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%CNV_FRC', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%CNV_FRC = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'CNVFRC', State_Met%CNV_FRC, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'CNVFRC'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%CNV_FRC,                                     &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 #endif
 
-    !-------------------------
+    !------------------------------------------------------------------------
     ! Convective Depth [m]
-    !-------------------------
-    ALLOCATE( State_Met%CONV_DEPTH( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%CONV_DEPTH', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%CONV_DEPTH = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'CONVDEPTH', State_Met%CONV_DEPTH, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'CONVDEPTH'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%CONV_DEPTH,                                  &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! EFLUX [W m-2]
-    !-------------------------
-    ALLOCATE( State_Met%EFLUX( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%EFLUX', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%EFLUX    = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'EFLUX', State_Met%EFLUX, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'EFLUX'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%EFLUX,                                       &
+         RC         = RC                                                    )
 
-    !-----------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !---------------------------------------------------------------------
     ! Lightning density [#/km2/s]
-    !-----------------------------
-    ALLOCATE( State_Met%FLASH_DENS( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%FLASH_DENS', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%FLASH_DENS = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FLASHDENS', State_Met%FLASH_DENS, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !---------------------------------------------------------------------
+    metId = 'FLASHDENS'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FLASH_DENS,                                  &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! FPBL [1] : Local variable for PBL mixing -- do not register this
+    !------------------------------------------------------------------------
+    metId = 'FPBL'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FPBL,                                        &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! FRCLND [1]
-    !-------------------------
-    ALLOCATE( State_Met%FRCLND( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%FRCLND', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%FRCLND = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FRCLND', State_Met%FRCLND, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FRCLND'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FRCLND,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! FRLAKE [1]
-    !-------------------------
-    ALLOCATE( State_Met%FRLAKE( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%FRLAKE', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%FRLAKE = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FRLAKE', State_Met%FRLAKE, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FRLAKE'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FRLAKE,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! FRLAND [1]
-    !-------------------------
-    ALLOCATE( State_Met%FRLAND( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%FRLAND', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%FRLAND = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FRLAND', State_Met%FRLAND, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FRLAND'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FRLAND,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! FRLANDIC [1]
-    !-------------------------
-    ALLOCATE( State_Met%FRLANDIC( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%FRLANDIC', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%FRLANDIC = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FRLANDIC', State_Met%FRLANDIC, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FRLANDIC'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FRLANDIC,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! FROCEAN [1]
-    !-------------------------
-    ALLOCATE( State_Met%FROCEAN( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%FROCEAN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%FROCEAN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FROCEAN', State_Met%FROCEAN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FROCEAN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FROCEAN,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! FRESEAICE [1]
-    !-------------------------
-    ALLOCATE( State_Met%FRSEAICE( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%FRSEAICE', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%FRSEAICE = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FRSEAICE', State_Met%FRSEAICE, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FRSEAICE'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FRSEAICE,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! FRSNO [1]
-    !-------------------------
-    ALLOCATE( State_Met%FRSNO( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%FRSNO', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%FRSNO = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FRSNO', State_Met%FRSNO, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FRSNO'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%FRSNO,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! GWETROOT [1]
-    !-------------------------
-    ALLOCATE( State_Met%GWETROOT( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%GWETROOT', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%GWETROOT = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'GWETROOT', State_Met%GWETROOT, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'GWETROOT'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%GWETROOT,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! GWETTOP [1]
-    !-------------------------
-    ALLOCATE( State_Met%GWETTOP( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%GWETTOP', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%GWETTOP = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'GWETTOP', State_Met%GWETTOP, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'GWETTOP'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%GWETTOP,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! HFLUX [W m-2]
-    !-------------------------
-    ALLOCATE( State_Met%HFLUX( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%HFLUX', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%HFLUX = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'HFLUX', State_Met%HFLUX, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'HFLUX'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%HFLUX,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! IMIX [1]: Local variable for PBL mixing -- Do not register this
+    !------------------------------------------------------------------------
+    metId = 'IMIX'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%IMIX,                                        &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! IREG [1]
+    !------------------------------------------------------------------------
+    metId = 'IREG'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%IREG,                                        &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! IsWater (do not register for diagnostics)
+    !------------------------------------------------------------------------
+    metId = 'IsWater'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%IsWater,                                     &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! IsWater (do not register for diagnostics)
+    !------------------------------------------------------------------------
+    metId = 'IsLand'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%IsLand,                                      &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! IsIce (do not register for diagnostics)
+    !------------------------------------------------------------------------
+    metId = 'IsIce'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%IsIce,                                       &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! IsSnow (do not register for diagnostics)
+    !------------------------------------------------------------------------
+    metId = 'IsSnow'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%IsSnow,                                      &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! LAI [1]
-    !-------------------------
-    ALLOCATE( State_Met%LAI( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%LAI', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%LAI = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'LAI', State_Met%LAI, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'LAI'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%LAI,                                         &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! LWI [1]
-    !-------------------------
-    ALLOCATE( State_Met%LWI( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%LWI', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%LWI = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'LWI', State_Met%LWI, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'LWI'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%LWI,                                         &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! MODISLAI [1]
+    !------------------------------------------------------------------------
+    metId = 'MODISLAI'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%MODISLAI,                                    &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PARDR [W m-2]
-    !-------------------------
-    ALLOCATE( State_Met%PARDR( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PARDR', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PARDR = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PARDR', State_Met%PARDR, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PARDR'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PARDR,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PARDF [W m-2]
-    !-------------------------
-    ALLOCATE( State_Met%PARDF( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PARDF', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PARDF= 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PARDF', State_Met%PARDF, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PARDF'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PARDF,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PBLH [m]
-    !-------------------------
-    ALLOCATE( State_Met%PBLH( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PBLH', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PBLH = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PBLH', State_Met%PBLH, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PBLH'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PBLH,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PBL top [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PBL_TOP_hPa( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PBL_TOP_hPa', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PBL_TOP_hPa = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PBLTOPHPA', State_Met%PBL_TOP_hPa, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PBLTOPhPa'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PBL_TOP_hPa,                                 &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PBL top [level]
-    !-------------------------
-    ALLOCATE( State_Met%PBL_TOP_L( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PBL_TOP_L', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PBL_TOP_L = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PBLTOPL', State_Met%PBL_TOP_L, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PBLTOPL'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PBL_TOP_L,                                   &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PBL top [m]
-    !-------------------------
-    ALLOCATE( State_Met%PBL_TOP_m( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PBL_TOP_m', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PBL_TOP_m = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PBLTOPM', State_Met%PBL_TOP_m,     &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PBLTOPM'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PBL_TOP_m,                                   &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PBL thickness [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PBL_THICK( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PBL_THICK', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PBL_THICK   = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PBLTHICK', State_Met%PBL_THICK,    &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PBLTHICK'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PBL_THICK,                                   &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! PHIS [m2 s-2]
-    !-------------------------
-    ALLOCATE( State_Met%PHIS( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PHIS', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PHIS = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PHIS', State_Met%PHIS, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !-------------------------
+    !------------------------------------------------------------------------
+    ! PHIS [m2 s-2], converted to [m] after data read
+    !------------------------------------------------------------------------
+    metId = 'PHIS'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PHIS,                                        &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PRECANV [kg m-2 s-1], converted to [mm day-1]
-    !-------------------------
-    ALLOCATE( State_Met%PRECANV( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PRECANV', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PRECANV = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PRECANV', State_Met%PRECANV, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PRECANV'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PRECANV,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PRECCON [kg m-2 s-1], converted to [mm day-1]
-    !-------------------------
-    ALLOCATE( State_Met%PRECCON( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PRECCON', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PRECCON = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PRECCON', State_Met%PRECCON, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PRECCON'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PRECCON,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PRECLSC [kg m-2 s-1], converted to [mm day-1]
-    !-------------------------
-    ALLOCATE( State_Met%PRECLSC( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PRECLSC', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PRECLSC  = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PRECLSC', State_Met%PRECLSC, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PRECLSC'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PRECLSC,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PRECTOT [kg m-2 s-1], converted to [mm day-1]
-    !-------------------------
-    ALLOCATE( State_Met%PRECTOT( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PRECTOT', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PRECTOT = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PRECTOT', State_Met%PRECTOT, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PRECTOT'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PRECTOT,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PS1_WET [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PS1_WET( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PS1_WET', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PS1_WET = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PS1WET', State_Met%PS1_WET, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PS1WET'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PS1_WET,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PS2_WET [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PS2_WET( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PS2_WET', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PS2_WET = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PS2WET', State_Met%PS2_WET, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PS2WET'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PS2_WET,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PSC2_WET [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PSC2_WET( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PSC2_WET', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PSC2_WET = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PSC2WET', State_Met%PSC2_WET, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PSC2WET'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PSC2_WET,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PS1_DRY [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PS1_DRY( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PS1_DRY', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PS1_DRY = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PS1DRY', State_Met%PS1_DRY, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PS1DRY'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PS1_DRY,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PS2_DRY [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PS2_DRY( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PS2_DRY', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PS2_DRY   = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PS2DRY', State_Met%PS2_DRY, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PS2DRY'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PS2_DRY,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PSC2_DRY [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PSC2_DRY( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PSC2_DRY', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PSC2_DRY = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PSC2DRY', State_Met%PSC2_DRY, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PSC2DRY'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PSC2_DRY,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE00 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE00( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE00', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE00 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE00', State_Met%SEAICE00, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE00'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE00,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE10 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE10( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE10', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE10 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE10', State_Met%SEAICE10, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE10'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE10,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE20 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE20( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE20', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE20 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE20', State_Met%SEAICE20, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE20'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE20,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE30 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE30( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE30', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE30 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE30', State_Met%SEAICE30, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE30'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE30,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE40 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE40( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE40', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE40 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE40', State_Met%SEAICE40, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE40'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE40,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE50 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE50( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE50', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE50 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE50', State_Met%SEAICE50, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE50'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE50,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE60 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE60( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE60', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE60 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE60', State_Met%SEAICE60, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE60'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE60,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE70 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE70( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE70', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE70 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE70', State_Met%SEAICE70, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE70'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE70,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE80 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE80( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE80', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE80 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE80', State_Met%SEAICE80, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE80'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE80,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SEAICE90 [1]
-    !-------------------------
-    ALLOCATE( State_Met%SEAICE90( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SEAICE90', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SEAICE90 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SEAICE90', State_Met%SEAICE90, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SEAICE90'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SEAICE90,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SLP [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%SLP( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SLP', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SLP = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SLP', State_Met%SLP, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SLP'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SLP,                                         &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SNODP [m]
-    !-------------------------
-    ALLOCATE( State_Met%SNODP( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SNODP', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SNODP = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SNODP', State_Met%SNODP, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SNODP'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SNODP,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SNOMAS [kg m-2]
-    !-------------------------
-    ALLOCATE( State_Met%SNOMAS( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SNOMAS', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SNOMAS = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SNOMAS', State_Met%SNOMAS, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SNOMAS'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SNOMAS,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SUNCOS [1]
-    !-------------------------
-    ALLOCATE( State_Met%SUNCOS( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SUNCOS', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SUNCOS = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SUNCOS', State_Met%SUNCOS, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SUNCOS'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SUNCOS,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SUNCOSmid [1]
-    !-------------------------
-    ALLOCATE( State_Met%SUNCOSmid( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SUNCOSmid', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SUNCOSmid = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SUNCOSmid', State_Met%SUNCOSmid, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SUNCOSmid'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SUNCOSmid,                                   &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SWGDN [W m-2]
-    !-------------------------
-    ALLOCATE( State_Met%SWGDN( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SWGDN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SWGDN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SWGDN', State_Met%SWGDN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SWGDN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SWGDN,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! TO3 [dobsons]
-    !-------------------------
-    ALLOCATE( State_Met%TO3( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TO3', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TO3 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TO3', State_Met%TO3, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'TO3'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TO3,                                         &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! TropLev [1]
-    !-------------------------
-    ALLOCATE( State_Met%TropLev( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TropLev', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TropLev = 0
-    CALL Register_MetField( am_I_Root, 'TROPLEV', State_Met%TropLev, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'TropLev'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TropLev,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! TropHt [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%TropHt( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TropHt', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TropHt = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TROPHT', State_Met%TropHt, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !-------------------------
-    ! TROPP [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%TROPP( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TROPP', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TROPP = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TROPP', State_Met%TROPP, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    ! TropHt [m]
+    !------------------------------------------------------------------------
+    metId = 'TropHt'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TropHt,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! TropP [hPa]
+    !------------------------------------------------------------------------
+    metId = 'TropP '
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TropP,                                       &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! TS [K]
-    !-------------------------
-    ALLOCATE( State_Met%TS( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TS', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TS = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TS', State_Met%TS, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'TS'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TS,                                          &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! TSKIN [K]
-    !-------------------------
-    ALLOCATE( State_Met%TSKIN( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TSKIN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TSKIN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TSKIN', State_Met%TSKIN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'TSKIN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TSKIN,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! U10M [m s-1]
-    !-------------------------
-    ALLOCATE( State_Met%U10M( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%U10M', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%U10M = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'U10M', State_Met%U10M, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'U10M'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%U10M,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! USTAR [m -s]
-    !-------------------------
-    ALLOCATE( State_Met%USTAR( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%USTAR', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%USTAR = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'USTAR', State_Met%USTAR, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'USTAR'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%USTAR,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! UVALBEDO [1]
-    !-------------------------
-    ALLOCATE( State_Met%UVALBEDO( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%UVALBEDO', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%UVALBEDO = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'UVALBEDO', State_Met%UVALBEDO, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'UVALBEDO'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%UVALBEDO,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! V10M [m s-1]
-    !-------------------------
-    ALLOCATE( State_Met%V10M( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%V10M', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%V10M = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'V10M', State_Met%V10M, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'V10M'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%V10M,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! Z0 [m]
-    !-------------------------
-    ALLOCATE( State_Met%Z0( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%Z0', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%Z0 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'Z0', State_Met%Z0, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'Z0'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%Z0,                                          &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
     !=======================================================================
     ! Allocate 3-D Arrays
     !=======================================================================
 
-    !-------------------------
+    !------------------------------------------------------------------------
     ! AD [kg]
-    !-------------------------
-    ALLOCATE( State_Met%AD( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%AD', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%AD = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'AD', State_Met%AD, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'AD'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%AD,                                          &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! AIRDEN [kg m-3]
-    !-------------------------
-    ALLOCATE( State_Met%AIRDEN( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%AIRDEN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%AIRDEN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'AIRDEN', State_Met%AIRDEN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'AIRDEN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%AIRDEN,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! MAIRDEN [kg m-3]
-    !-------------------------
-    ALLOCATE( State_Met%MAIRDEN( IM, JM, LM   ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%MAIRDEN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%MAIRDEN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'MAIRDEN', State_Met%MAIRDEN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !-------------------------
+    !------------------------------------------------------------------------
     ! AIRNUMDEN [1]
-    !-------------------------
-    ALLOCATE( State_Met%AIRNUMDEN( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%AIRNUMDEN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%AIRNUMDEN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'AIRNUMDEN', State_Met%AIRNUMDEN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'AIRNUMDEN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%AIRNUMDEN,                                   &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! AIRVOL [m3]
-    !-------------------------
-    ALLOCATE( State_Met%AIRVOL( IM, JM, LM  ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%AIRVOL', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%AIRVOL = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'AIRVOL', State_Met%AIRVOL, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'AIRVOL'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%AIRVOL,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! AVGW [v/v]
-    !-------------------------
-    ALLOCATE( State_Met%AVGW( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%AVGW', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%AVGW = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'AVGW', State_Met%AVGW, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'AVGW'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%AVGW,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! BXHEIGHT [m]
-    !-------------------------
-    ALLOCATE( State_Met%BXHEIGHT( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%BXHEIGHT', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%BXHEIGHT = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'BXHEIGHT', State_Met%BXHEIGHT, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'BXHEIGHT'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%BXHEIGHT,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! CLDF [1]
-    !-------------------------
-    ALLOCATE( State_Met%CLDF( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%CLDF', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%CLDF = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'CLDF', State_Met%CLDF, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'CLDF'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%CLDF,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! CMFMC [kg m-2 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%CMFMC( IM, JM, LM+1 ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%CMFMC', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%CMFMC = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'CMFMC', State_Met%CMFMC, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'CMFMC'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%CMFMC,                                       &
+         onEdges    = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! DELP [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%DELP( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%DELP', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%DELP = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'DELP', State_Met%DELP, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'DELP'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%DELP,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! DELP_DRY [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%DELP_DRY( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%DELP_DRY', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%DELP_DRY = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'DELPDRY', State_Met%DELP_DRY, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'DELPDRY'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%DELP_DRY,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! DP_DRY_PREV [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%DP_DRY_PREV( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%DP_DRY_PREV', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%DP_DRY_PREV= 0.0_fp
-    CALL Register_MetField( am_I_Root, 'DPDRYPREV', State_Met%DP_DRY_PREV, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'DPDRYPREV'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%DP_DRY_PREV,                                 &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! Fraction of PBL
-    !-------------------------
-    ALLOCATE( State_Met%F_OF_PBL( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%F_OF_PBL', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%F_OF_PBL = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FOFPBL', State_Met%F_OF_PBL,       &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FOFPBL'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%F_OF_PBL,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! Fraction of box under PBL top
-    !-------------------------
-    ALLOCATE( State_Met%F_UNDER_PBLTOP( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%F_UNDER_PBLTOP', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%F_UNDER_PBLTOP = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'FUNDERPBLTOP',                     &
-                            State_Met%F_UNDER_PBLTOP,                      &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'FUNDERPBLTOP'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%F_UNDER_PBLTOP,                              &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! SPHU_PREV [g/kg]
-    !-------------------------
-    ALLOCATE( State_Met%SPHU_PREV( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SPHU_PREV', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SPHU_PREV= 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SPHUPREV', State_Met%SPHU_PREV, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !-------------------------
+    !------------------------------------------------------------------------
     ! DQRCU [kg kg-1 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%DQRCU( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%DQRCU', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%DQRCU = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'DQRCU', State_Met%DQRCU, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'DQRCU'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%DQRCU,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! DQRLSAN [kg kg-1 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%DQRLSAN( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%DQRLSAN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%DQRLSAN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'DQRLSAN', State_Met%DQRLSAN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'DQRLSAN '
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%DQRLSAN,                                     &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! DTRAIN [kg m-2 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%DTRAIN( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%DTRAIN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%DTRAIN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'DTRAIN', State_Met%DTRAIN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'DTRAIN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%DTRAIN,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! ILAND [1]
+    !------------------------------------------------------------------------
+    metId = 'ILAND'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%ILAND,                                       &
+         nSlots     = NSURFTYPE,                                             &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! IUSE [1]
+    !------------------------------------------------------------------------
+    metId = 'IUSE'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%IUSE,                                        &
+         nSlots     = NSURFTYPE,                                             &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! LANDTYPEFRAC [1]
+    !------------------------------------------------------------------------
+    metId = 'LANDTYPEFRAC'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%LANDTYPEFRAC,                                &
+         nSlots     = NSURFTYPE,                                             &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! MAIRDEN [kg m-3]
+    !------------------------------------------------------------------------
+    metId = 'MAIRDEN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%MAIRDEN,                                     &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! OMEGA [Pa s-1]
-    !-------------------------
-    ALLOCATE( State_Met%OMEGA( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%OMEGA', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%OMEGA = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'OMEGA', State_Met%OMEGA, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'OMEGA'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%OMEGA,                                       &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! OPTD [1]
-    !-------------------------
-    ALLOCATE( State_Met%OPTD( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%OPTD', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%OPTD = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'OPTD', State_Met%OPTD, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'OPTD'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%OPTD,                                         &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PEDGE [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PEDGE( IM, JM, LM+1 ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PEDGE', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PEDGE = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PEDGE', State_Met%PEDGE, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PEDGE'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PEDGE,                                       &
+         onEdges    = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PEDGE_DRY [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PEDGE_DRY ( IM, JM, LM+1 ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PEDGE_DRY', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PEDGE_DRY = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PEDGEDRY', State_Met%PEDGE_DRY, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PEDGEDRY'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PEDGE_DRY,                                   &
+         onEdges    = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! PFICU [kg m-2 s-1]
+    !------------------------------------------------------------------------
+    metId = 'PFICU'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PFICU,                                       &
+         onEdges    = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! PFILSAN [kg m-2 s-1]
+    !------------------------------------------------------------------------
+    metId = 'PFILSAN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PFILSAN,                                     &
+         onEdges    = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! PFLCU [kg m-2 s-1]
+    !------------------------------------------------------------------------
+    metId = 'PFLCU'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PFLCU,                                       &
+         onEdges    = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! PFLLSAN [kg m-2 s-1]
+    !------------------------------------------------------------------------
+    metId = 'PFLLSAN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PFLLSAN,                                     &
+         onEdges    = .TRUE.,                                                &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PMID [1]
-    !-------------------------
-    ALLOCATE( State_Met%PMID( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PMID', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PMID = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PMID', State_Met%PMID, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PMID'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PMID,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! PMID_DRY [hPa]
-    !-------------------------
-    ALLOCATE( State_Met%PMID_DRY( IM, JM, LM   ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PMID_DRY', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PMID_DRY = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PMIDDRY', State_Met%PMID_DRY, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'PMIDDRY'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%PMID_DRY,                                    &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! QI [kg kg-1]
-    !-------------------------
-    ALLOCATE( State_Met%QI( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%QI', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%QI = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'QI', State_Met%QI, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'QI'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%QI,                                          &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! QL [kg kg-1]
-    !-------------------------
-    ALLOCATE( State_Met%QL( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%QL', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%QL = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'QL', State_Met%QL, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'QL'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%QL,                                          &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! REEVAPCN [kg kg-1 s-1]
+    !------------------------------------------------------------------------
+    metId = 'REEVAPCN'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%REEVAPCN,                                    &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! REEVAPLS [kg kg-1 s-1]
+    !------------------------------------------------------------------------
+    metId = 'REEVAPLS'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%REEVAPLS,                                    &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! RH [%]
-    !-------------------------
-    ALLOCATE( State_Met%RH ( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%RH', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%RH = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'RH', State_Met%RH, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'RH'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%RH,                                          &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! SPHU [g kg-1]
-    !-------------------------
-    ALLOCATE( State_Met%SPHU( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SPHU', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SPHU = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SPHU', State_Met%SPHU, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'SPHU'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SPHU,                                        &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! SPHU1 [g kg-1]
+    !------------------------------------------------------------------------
+    metId = 'SPHU1'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SPHU1,                                       &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! SPHU2 [g kg-1]
+    !------------------------------------------------------------------------
+    metId = 'SPHU2'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SPHU2,                                       &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! SPHU_PREV [g/kg]
+    !------------------------------------------------------------------------
+    metId = 'SPHUPREV'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%SPHU_PREV,                                   &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! T [K]
-    !-------------------------
-    ALLOCATE( State_Met%T( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%T', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%T = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'T', State_Met%T, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'T'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%T,                                           &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! THETA [K]
-    !-------------------------
-    ALLOCATE( State_Met%THETA( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%THETA', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%THETA = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'THETA', State_Met%THETA, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !-------------------------
-    ! TV [K]
-    !-------------------------
-    ALLOCATE( State_Met%TV( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TV', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TV = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TV', State_Met%TV, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
+    !------------------------------------------------------------------------
     ! TAUCLI [1]
-    !-------------------------
-    ALLOCATE( State_Met%TAUCLI( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TAUCLI', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TAUCLI = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TAUCLI', State_Met%TAUCLI, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'TAUCLI'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TAUCLI,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! TAUCLW [1]
-    !-------------------------
-    ALLOCATE( State_Met%TAUCLW( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TAUCLW', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TAUCLW = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TAUCLW', State_Met%TAUCLW, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'TAUCLW'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TAUCLW,                                      &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! THETA [K]
+    !------------------------------------------------------------------------
+    metId = 'THETA'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%THETA,                                       &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! TMPU1 [K]
+    !------------------------------------------------------------------------
+    metId = 'TMPU1'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TMPU1,                                       &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! TMPU2 [K]
+    !------------------------------------------------------------------------
+    metId = 'TMPU2'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TMPU2,                                       &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
+    ! TV [K]
+    !------------------------------------------------------------------------
+    metId = 'TV'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%TV,                                          &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! U [m s-1]
-    !-------------------------
-    ALLOCATE( State_Met%U( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%U', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%U = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'U', State_Met%U, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'U'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%U,                                           &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! V [m s-1]
-    !-------------------------
-    ALLOCATE( State_Met%V( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%V', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%V = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'V', State_Met%V, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
+#ifdef MODEL_GEOS
+    !------------------------------------------------------------------------
+    ! UPDVVEL [hPa s-1]
     ! Updraft vertical velocity is not yet a standard GEOS-FP
     ! field. Only available to online model (ckeller, 3/4/16)
-#if defined( ESMF_ ) || defined( MODEL_ )
-    !-------------------------
-    ! UPDVVEL [hPa s-1]
-    !-------------------------
-    ALLOCATE( State_Met%UPDVVEL( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%UPDVVEL', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%UPDVVEL  = -999.0_fp
-    CALL Register_MetField( am_I_Root, 'UPDVVEL', State_Met%UPDVVEL, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'UPDVVEL'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%UPDVVEL,                                     &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 #endif
 
-    ! Pick the proper vertical dimension
-    LX = LM + 1           ! For fields that are on level edges
+    !------------------------------------------------------------------------
+    ! V [m s-1]
+    !------------------------------------------------------------------------
+    metId = 'V'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%V,                                           &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! PFICU [kg m-2 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%PFICU( IM, JM, LX ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PFICU', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PFICU = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PFICU', State_Met%PFICU, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !-------------------------
-    ! PFILSAN [kg m-2 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%PFILSAN( IM, JM, LX ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PFILSAN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PFILSAN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PFILSAN', State_Met%PFILSAN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! PFLCU [kg m-2 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%PFLCU( IM, JM, LX ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PFLCU', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PFLCU = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PFLCU', State_Met%PFLCU, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! PFLLSAN [kg m-2 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%PFLLSAN( IM, JM, LX ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%PFLLSAN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%PFLLSAN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'PFLLSAN', State_Met%PFLLSAN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! REEVAPCN [kg kg-1 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%REEVAPCN( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%REEVAPCN', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%REEVAPCN = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'REEVAPCN', State_Met%REEVAPCN, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! REEVAPLS [kg kg-1 s-1]
-    !-------------------------
-    ALLOCATE( State_Met%REEVAPLS( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%REEVAPLS', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%REEVAPLS = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'REEVAPLS', State_Met%REEVAPLS, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! SPHU1 [g kg-1]
-    !-------------------------
-    ALLOCATE( State_Met%SPHU1( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SPHU1', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SPHU1 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SPHU1', State_Met%SPHU1, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! SPHU2 [g kg-1]
-    !-------------------------
-    ALLOCATE( State_Met%SPHU2( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%SPHU2', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%SPHU2 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'SPHU2', State_Met%SPHU2, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! TMPU1 [K]
-    !-------------------------
-    ALLOCATE( State_Met%TMPU1( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TMPU1', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TMPU1 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TMPU1', State_Met%TMPU1, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! TMPU2 [K]
-    !-------------------------
-    ALLOCATE( State_Met%TMPU2( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%TMPU2', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%TMPU2 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'TMPU2', State_Met%TMPU2, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! Age of Air [s]
-    !-------------------------
-    ALLOCATE( State_Met%AgeOfAir( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%AgeOfAir', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%AgeOfAir = 0
-    CALL Register_MetField( am_I_Root, 'AgeOfAir', State_Met%AgeOfAir, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !=======================================================================
-    ! Allocate land type and leaf area index fields for dry deposition
-    !=======================================================================
-
-    !-------------------------
-    ! IREG [1]
-    !-------------------------
-    ALLOCATE( State_Met%IREG( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%IREG', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%IREG = 0
-    CALL Register_MetField( am_I_Root, 'IREG', State_Met%IREG, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! ILAND [1]
-    !-------------------------
-    ALLOCATE( State_Met%ILAND( IM, JM, NSURFTYPE ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%ILAND', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%ILAND = 0
-    CALL Register_MetField( am_I_Root, 'ILAND', State_Met%ILAND, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
-    ! IUSE [1]
-    !-------------------------
-    ALLOCATE( State_Met%IUSE( IM, JM, NSURFTYPE ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%IUSE', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%IUSE = 0
-    CALL Register_MetField( am_I_Root, 'IUSE', State_Met%IUSE, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-
-    !-------------------------
+    !------------------------------------------------------------------------
     ! XLAI [1]
-    !-------------------------
-    ALLOCATE( State_Met%XLAI( IM, JM, NSURFTYPE ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%XLAI', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%XLAI = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'XLAI', State_Met%XLAI, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'XLAI'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%XLAI,                                        &
+         nSlots     = NSURFTYPE,                                             &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! MODISLAI [1]
-    !-------------------------
-    ALLOCATE( State_Met%MODISLAI( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%MODISLAI', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%MODISLAI = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'MODISLAI', State_Met%MODISLAI, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !-------------------------
+    !------------------------------------------------------------------------
     ! XLAI2 [1]
-    !-------------------------
-    ALLOCATE( State_Met%XLAI2( IM, JM, NSURFTYPE ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%XLAI2', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%XLAI2 = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'XLAI2', State_Met%XLAI2, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'XLAI2'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%XLAI2,                                       &
+         nSlots     = NSURFTYPE,                                             &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! LANDTYPEFRAC [1]
-    !-------------------------
-    ALLOCATE( State_Met%LANDTYPEFRAC( IM, JM, NSURFTYPE ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%LANDTYPEFRAC', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%LANDTYPEFRAC = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'LANDTYPEFRAC', State_Met%LANDTYPEFRAC, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !-------------------------
+    !------------------------------------------------------------------------
     ! XLAI_NATIVE [1]
-    !-------------------------
-    ALLOCATE( State_Met%XLAI_NATIVE( IM, JM, NSURFTYPE ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%XLAI_NATIVE', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%XLAI_NATIVE  = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'XLAINATIVE', State_Met%XLAI_NATIVE, &
-                            State_Met, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    !------------------------------------------------------------------------
+    metId = 'XLAINATIVE'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%XLAI_NATIVE,                                 &
+         nSlots     = NSURFTYPE,                                             &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !========================================================================
+    ! Allocate fields used by wet scavenging and other GeosCore modules.
+    ! Note some are memory-order ZXY and some are regular XYZ.
+    ! Only allocate arrays if wetdep or convection is turned on
+    !========================================================================
+    IF ( Input_Opt%LWETD .or. Input_Opt%LCONV ) THEN
+
+       !---------------------------------------------------------------------
+       ! C_H2O
+       !---------------------------------------------------------------------
+       metId = 'C_H2O'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Met  = State_Met,                                          &
+            State_Grid = State_Grid,                                         &
+            metId      = metId,                                              &
+            Ptr2Data   = State_Met%C_H2O,                                    &
+            noRegister = .TRUE.,                                             &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+       !-----------------------------------------------------------------
+       ! CLDICE
+       !-----------------------------------------------------------------
+       metId = 'CLDICE'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Met  = State_Met,                                          &
+            State_Grid = State_Grid,                                         &
+            metId      = metId,                                              &
+            Ptr2Data   = State_Met%CLDICE,                                   &
+            noRegister = .TRUE.,                                             &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+       !-----------------------------------------------------------------
+       ! CLDLIQ
+       !-----------------------------------------------------------------
+       metId = 'CLDLIQ'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Met  = State_Met,                                          &
+            State_Grid = State_Grid,                                         &
+            metId      = metId,                                              &
+            Ptr2Data   = State_Met%CLDLIQ,                                   &
+            noRegister = .TRUE.,                                             &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+       !---------------------------------------------------------------------
+       ! PDOWN (ZXY order)
+       !---------------------------------------------------------------------
+       metId = 'PDOWN'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Met  = State_Met,                                          &
+            State_Grid = State_Grid,                                         &
+            metId      = metId,                                              &
+            Ptr2Data   = State_Met%PDOWN,                                    &
+            noRegister = .TRUE.,                                             &
+            zxyOrder   = .TRUE.,                                             &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+       !---------------------------------------------------------------------
+       ! QQ (ZXY order)
+       !---------------------------------------------------------------------
+       metId = 'QQ'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Met  = State_Met,                                          &
+            State_Grid = State_Grid,                                         &
+            metId      = metId,                                              &
+            Ptr2Data   = State_Met%QQ,                                       &
+            noRegister = .TRUE.,                                             &
+            zxyOrder   = .TRUE.,                                             &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+       !---------------------------------------------------------------------
+       ! REEVAP (ZXY order)
+       !---------------------------------------------------------------------
+       metId = 'REEVAP'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Met  = State_Met,                                          &
+            State_Grid = State_Grid,                                         &
+            metId      = metId,                                              &
+            Ptr2Data   = State_Met%REEVAP,                                   &
+            noRegister = .TRUE.,                                             &
+            zxyOrder   = .TRUE.,                                             &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+
+#ifdef APM
+       !---------------------------------------------------------------------
+       ! PSO4_SO2APM2
+       !---------------------------------------------------------------------
+       metId = 'PSO4SO2APM2'
+       CALL Init_and_Register(                                               &
+            Input_Opt  = Input_Opt,                                          &
+            State_Met  = State_Met,                                          &
+            State_Grid = State_Grid,                                         &
+            metId      = metId,                                              &
+            Ptr2Data   = State_Met%PSO4_SO2APM2,                             &
+            noRegister = .TRUE.,                                             &
+            RC         = RC                                                 )
+
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+          CALL GC_Error( errMsg, RC, thisLoc )
+          RETURN
+       ENDIF
+#endif
+
+    ENDIF
 
     !=======================================================================
     ! Allocate fields for querying which vertical regime a grid box is in
     ! or if a grid box is near local solar noontime.
     !
-    ! %%%%% NOTE: Do not register these query fields %%%%%
+    ! %%%%% NOTE: Most of these are logical fields and thus %%%%%
+    ! %%%%%   cannot be archived to HISTORY diagnostics.    %%%%%
     !=======================================================================
 
-    !-------------------------
+    !------------------------------------------------------------------------
     ! InChemGrid
-    !-------------------------
-    ALLOCATE( State_Met%InChemGrid( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%IsChemGrid', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%InChemGrid = .FALSE.
+    !------------------------------------------------------------------------
+    metId = 'InChemGrid'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%InChemGrid,                                  &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! InPBL
-    !-------------------------
-    ALLOCATE( State_Met%InPbl( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%InPbl', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%InPbl = .FALSE.
+    !------------------------------------------------------------------------
+    metId = 'InPbl'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%InPbl,                                       &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! InStratosphere
-    !-------------------------
-    ALLOCATE( State_Met%InStratosphere( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%InStratosphere', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%InStratosphere = .FALSE.
+    !------------------------------------------------------------------------
+    metId = 'InStratosphere'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%InStratosphere,                              &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! InStratMeso
-    !-------------------------
-    ALLOCATE( State_Met%InStratMeso( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%InStratMeso', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%InStratMeso = .FALSE.
+    !------------------------------------------------------------------------
+    metId = 'InStratMeso'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%InStratMeso,                                 &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! InTroposphere
-    !-------------------------
-    ALLOCATE( State_Met%InTroposphere( IM, JM, LM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%InTropoSphere', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%InTroposphere = .FALSE.
+    !------------------------------------------------------------------------
+    metId = 'InTroposphere'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%InTroposphere,                               &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !------------------------------------------------------------------------
     ! IsLocalNoon
-    !-------------------------
-    ALLOCATE( State_Met%IsLocalNoon( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%IsLocalNoon', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%IsLocalNoon = .FALSE.
+    !------------------------------------------------------------------------
+    metId = 'IsLocalNoon'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%IsLocalNoon,                                 &
+         noRegister = .TRUE.,                                                &
+         RC         = RC                                                    )
 
-    !-------------------------
-    ! LocalSolarTime
-    !-------------------------
-    ALLOCATE( State_Met%LocalSolarTime( IM, JM ), STAT=RC )
-    CALL GC_CheckVar( 'State_Met%LocalSolarTime', 0, RC )
-    IF ( RC /= GC_SUCCESS ) RETURN
-    State_Met%LocalSolarTime = 0.0_fp
-    CALL Register_MetField( am_I_Root, 'LOCALSOLARTIME',                     &
-                            State_Met%LocalSolarTime,                        &
-                            State_Met, RC                             )
-    IF ( RC /= GC_SUCCESS ) RETURN
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
 
-    !=======================================================================
+    !------------------------------------------------------------------------
+    ! LocalSolarTime (register this for diagnostics)
+    !------------------------------------------------------------------------
+    metId = 'LocalSolarTime'
+    CALL Init_and_Register(                                                  &
+         Input_Opt  = Input_Opt,                                             &
+         State_Met  = State_Met,                                             &
+         State_Grid = State_Grid,                                            &
+         metId      = metId,                                                 &
+         Ptr2Data   = State_Met%LocalSolarTime,                              &
+         RC         = RC                                                    )
+
+    IF ( RC /= GC_SUCCESS ) THEN
+       errMsg = TRIM( errMsg_ir ) // TRIM( metId )
+       CALL GC_Error( errMsg, RC, thisLoc )
+       RETURN
+    ENDIF
+
+    !========================================================================
+    ! Once we are done registering all fields, we need to define the
+    ! registry lookup table.  This algorithm will avoid hash collisions.
+    !========================================================================
+    CALL Registry_Set_LookupTable( Registry  = State_Met%Registry,           &
+                                   RegDict   = State_Met%RegDict,            &
+                                   RC        = RC                           )
+
+    ! Trap potential errors
+    IF ( RC /= GC_SUCCESS ) THEN
+       ErrMsg = 'Error encountered in routine "Registry_Set_LookupTable"!'
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+    !========================================================================
     ! Print information about the registered fields (short format)
-    !=======================================================================
-    IF ( am_I_Root ) THEN
+    !========================================================================
+    IF ( Input_Opt%amIRoot ) THEN
        WRITE( 6, 10 )
-10     FORMAT( /, 'Registered variables contained within the State_Met object:')
+10     FORMAT(/, 'Registered variables contained within the State_Met object:')
        WRITE( 6, '(a)' ) REPEAT( '=', 79 )
     ENDIF
-    CALL Registry_Print( am_I_Root   = am_I_Root,                            &
+    CALL Registry_Print( Input_Opt   = Input_Opt,                            &
                          Registry    = State_Met%Registry,                   &
                          ShortFormat = .TRUE.,                               &
                          RC          = RC                                   )
@@ -1941,15 +3206,11 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Cleanup_State_Met( am_I_Root, State_Met, RC )
+  SUBROUTINE Cleanup_State_Met( State_Met, RC )
 !
 ! !USES:
 !
     USE ErrCode_Mod
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,        INTENT(IN)    :: am_I_Root   ! Is this the root CPU?
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -1961,16 +3222,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  19 Oct 2012 - R. Yantosca - Initial version, based on gc_environment_mod.F90
-!  23 Oct 2012 - R. Yantosca - Now deallocate QI, QL fields
-!  15 Nov 2012 - M. Payer    - Added all remaining met fields
-!  19 Nov 2012 - R. Yantosca - Segregate DEALLOCATE statements w/ #ifdefs
-!                              for each met field data product type
-!  27 Nov 2012 - R. Yantosca - Now deallocate the SUNCOS fields
-!  12 Dec 2012 - R. Yantosca - Now deallocate the IREG, ILAND, IUSE fields
-!  26 Sep 2013 - R. Yantosca - Renamed GEOS_57 Cpp switch to GEOS_FP
-!  22 Aug 2014 - R. Yantosca - Deallocate PBL_TOP_L field
-!  05 Nov 2018 - R. Yantosca - Now deallocate AND nullify all pointer fields
-!                              (except 3D fields for GCHP/GEOS/WRF interfaces)
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2114,6 +3366,34 @@ CONTAINS
        CALL GC_CheckVar( 'State_Met%HFLUX', 2, RC )
        IF ( RC /= GC_SUCCESS ) RETURN
        State_Met%HFLUX => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%IsWater ) ) THEN
+       DEALLOCATE( State_Met%IsWater, STAT=RC )
+       CALL GC_CheckVar( 'State_Met%IsWater', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Met%IsWater => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%IsLand ) ) THEN
+       DEALLOCATE( State_Met%IsLand, STAT=RC )
+       CALL GC_CheckVar( 'State_Met%IsLand', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Met%IsLand => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%IsIce ) ) THEN
+       DEALLOCATE( State_Met%IsIce, STAT=RC )
+       CALL GC_CheckVar( 'State_Met%IsIce', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Met%IsIce => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%IsSnow ) ) THEN
+       DEALLOCATE( State_Met%IsSnow, STAT=RC )
+       CALL GC_CheckVar( 'State_Met%IsSnow', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Met%IsSnow => NULL()
     ENDIF
 
     IF ( ASSOCIATED( State_Met%LAI ) ) THEN
@@ -2466,6 +3746,20 @@ CONTAINS
        State_Met%IREG => NULL()
     ENDIF
 
+    IF ( ASSOCIATED( State_Met%IMIX) ) THEN
+       DEALLOCATE( State_Met%IMIX, STAT=RC  )
+       CALL GC_CheckVar( 'State_Met%IMIX', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Met%IMIX => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%FPBL ) ) THEN
+       DEALLOCATE( State_Met%FPBL, STAT=RC  )
+       CALL GC_CheckVar( 'State_Met%FPBL', 2, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       State_Met%FPBL => NULL()
+    ENDIF
+
     !========================================================================
     ! Deallocate 3-D fields
     !
@@ -2513,9 +3807,9 @@ CONTAINS
 #endif
     ENDIF
 
-    !---------------------------
+    !------------------------------------------------------------------------
     ! 3-D fields
-    !---------------------------
+    !------------------------------------------------------------------------
     IF ( ASSOCIATED( State_Met%AD ) ) THEN
 #if defined( ESMF_ ) || defined( MODEL_WRF )
        State_Met%AD => NULL()
@@ -3011,17 +4305,6 @@ CONTAINS
 #endif
     ENDIF
 
-    IF ( ASSOCIATED( State_Met%AgeOfAir ) ) THEN
-#if defined( ESMF_ ) || defined( MODEL_WRF )
-       State_Met%AgeOfAir => NULL()
-#else
-       DEALLOCATE( State_Met%AgeOfAir, STAT=RC  )
-       CALL GC_CheckVar( 'State_Met%AgeOfAir', 2, RC )
-       IF ( RC /= GC_SUCCESS ) RETURN
-       State_Met%AgeOfAir => NULL()
-#endif
-    ENDIF
-
     !=======================================================================
     ! Fields for querying which vertical regime a grid box is in
     ! or if it is near local solar noon at a grid box
@@ -3075,9 +4358,63 @@ CONTAINS
        State_Met%LocalSolarTime => NULL()
     ENDIF
 
-    !-----------------------------------------------------------------------
+    !========================================================================
+    ! Fields temporaries used in other modules
+    !========================================================================
+    IF ( ASSOCIATED( State_Met%C_H2O ) ) THEN
+      DEALLOCATE( State_Met%C_H2O, STAT=RC )
+      CALL GC_CheckVar( 'State_Met%C_H2O', 2, RC )
+      IF ( RC /= GC_SUCCESS ) RETURN
+      State_Met%C_H2O => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%CLDICE ) ) THEN
+      DEALLOCATE( State_Met%CLDICE, STAT=RC )
+      CALL GC_CheckVar( 'State_Met%CLDICE', 2, RC )
+      IF ( RC /= GC_SUCCESS ) RETURN
+      State_Met%CLDICE => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%CLDLIQ ) ) THEN
+      DEALLOCATE( State_Met%CLDLIQ, STAT=RC )
+      CALL GC_CheckVar( 'State_Met%CLDLIQ', 2, RC )
+      IF ( RC /= GC_SUCCESS ) RETURN
+      State_Met%CLDLIQ => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%PDOWN ) ) THEN
+      DEALLOCATE( State_Met%PDOWN, STAT=RC )
+      CALL GC_CheckVar( 'State_Met%PDOWN', 2, RC )
+      IF ( RC /= GC_SUCCESS ) RETURN
+      State_Met%PDOWN => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%QQ ) ) THEN
+      DEALLOCATE( State_Met%QQ, STAT=RC )
+      CALL GC_CheckVar( 'State_Met%QQ', 2, RC )
+      IF ( RC /= GC_SUCCESS ) RETURN
+      State_Met%QQ => NULL()
+    ENDIF
+
+    IF ( ASSOCIATED( State_Met%REEVAP ) ) THEN
+      DEALLOCATE( State_Met%REEVAP, STAT=RC )
+      CALL GC_CheckVar( 'State_Met%REEVAP', 2, RC )
+      IF ( RC /= GC_SUCCESS ) RETURN
+      State_Met%REEVAP => NULL()
+    ENDIF
+
+#ifdef APM
+    IF ( ASSOCIATED( State_Met%PSO4_SO2APM2 ) ) THEN
+      DEALLOCATE( State_Met%PSO4_SO2APM2, STAT=RC )
+      CALL GC_CheckVar( 'State_Met%PSO4_SO2APM2', 2, RC )
+      IF ( RC /= GC_SUCCESS ) RETURN
+      State_Met%PSO4_SO2APM2 => NULL()
+    ENDIF
+#endif
+
+   !-------------------------------------------------------------------------
     ! Template for deallocating more arrays, replace xxx with field name
-    !-----------------------------------------------------------------------
+   !-------------------------------------------------------------------------
     !IF ( ASSOCIATED( State_Met%xxx ) ) THEN
     !   DEALLOCATE( State_Met%xxx, STAT=RC )
     !   CALL GC_CheckVar( 'State_Met%xxx', 2, RC )
@@ -3085,10 +4422,10 @@ CONTAINS
     !   State_Met%xxx => NULL()
     !ENDIF
 
-    !=======================================================================
+    !========================================================================
     ! Destroy the registry of fields for this module
-    !=======================================================================
-    CALL Registry_Destroy( am_I_Root, State_Met%Registry, RC )
+    !========================================================================
+    CALL Registry_Destroy( State_Met%Registry, State_Met%RegDict, RC )
     IF ( RC /= GC_SUCCESS ) THEN
        ErrMsg = 'Could not destroy registry object State_Met%Registry!'
        CALL GC_Error( ErrMsg, RC, ThisLoc )
@@ -3113,9 +4450,9 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Get_Metadata_State_Met( am_I_Root, metadataID, Found,  &
-                                     RC,        Desc,       Units,  &
-                                     Rank,      Type,       VLoc )
+  SUBROUTINE Get_Metadata_State_Met( am_I_Root, metadataID, Found,   RC,     &
+                                     Desc,      Units,      Rank,    Type,   &
+                                     VLoc,      perQnt                      )
 !
 ! !USES:
 !
@@ -3124,7 +4461,7 @@ CONTAINS
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,             INTENT(IN)  :: am_I_Root  ! Is this the root CPU?
+    LOGICAL,             INTENT(IN)  :: am_I_Root
     CHARACTER(LEN=*),    INTENT(IN)  :: metadataID ! State_Met field ID
 !
 ! !OUTPUT PARAMETERS:
@@ -3136,12 +4473,11 @@ CONTAINS
     INTEGER,             OPTIONAL    :: Rank       ! # of dimensions
     INTEGER,             OPTIONAL    :: Type       ! Desc of data type
     INTEGER,             OPTIONAL    :: VLoc       ! Vertical placement
-!
-! !REMARKS:
+    CHARACTER(LEN=255),  OPTIONAL    :: perQnt     ! "Quantity" dimension?
 !
 ! !REVISION HISTORY:
 !  28 Aug 2017 - E. Lundgren - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3149,11 +4485,11 @@ CONTAINS
 ! !LOCAL VARIABLES:
 !
     CHARACTER(LEN=255) :: ErrMsg, ThisLoc, Name_AllCaps
-    LOGICAL            :: isDesc, isUnits, isRank, isType, isVLoc
+    LOGICAL            :: isDesc, isUnits, isRank, isType, isVLoc, isQnt
 
-    !=======================================================================
+    !========================================================================
     ! Initialize
-    !=======================================================================
+    !========================================================================
 
     ! Assume success
     RC    =  GC_SUCCESS
@@ -3161,32 +4497,34 @@ CONTAINS
     Found = .TRUE.
 
     ! Optional arguments present?
-    isDesc  = PRESENT( Desc  )
-    isUnits = PRESENT( Units )
-    isRank  = PRESENT( Rank  )
-    isType  = PRESENT( Type  )
-    isVLoc  = PRESENT( VLoc  )
+    isDesc  = PRESENT( Desc   )
+    isUnits = PRESENT( Units  )
+    isRank  = PRESENT( Rank   )
+    isType  = PRESENT( Type   )
+    isVLoc  = PRESENT( VLoc   )
+    isQnt   = PRESENT( perQnt )
 
     ! Set defaults for optional arguments. Assume type and vertical
     ! location are real (flexible precision) and center unless specified
     ! otherwise
-    IF ( isUnits ) Units = ''
-    IF ( isDesc  ) Desc  = ''
-    IF ( isRank  ) Rank  = -1              ! initialize as bad value
-    IF ( isType  ) Type  = KINDVAL_FP      ! Assume real with flex precision
-    IF ( isVLoc  ) VLoc  = VLocationNone   ! Assume no vertical location
+    IF ( isUnits ) Units  = ''
+    IF ( isDesc  ) Desc   = ''
+    IF ( isRank  ) Rank   = -1              ! initialize as bad value
+    IF ( isType  ) Type   = KINDVAL_FP      ! Assume real with flex precision
+    IF ( isVLoc  ) VLoc   = VLocationNone   ! Assume no vertical location
+    IF ( isQnt   ) perQnt = ''              ! Assume no "species" dimension
 
     ! Convert name to uppercase
     Name_AllCaps = To_Uppercase( TRIM( metadataID ) )
 
-    !=======================================================================
+    !========================================================================
     ! Values for Retrieval (string comparison slow but happens only once)
-    !=======================================================================
+    !========================================================================
     SELECT CASE ( TRIM( Name_AllCaps) )
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! 2-D Fields
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        CASE ( 'ALBD' )
           IF ( isDesc  ) Desc  = 'Visible surface albedo'
           IF ( isUnits ) Units = '1'
@@ -3213,12 +4551,11 @@ CONTAINS
           IF ( isRank  ) Rank  = 2
           IF ( isType  ) Type  = KINDVAL_I4
 
-#if defined( ESMF_ ) || defined( MODEL_ )
+#ifdef MODEL_GEOS
        CASE ( 'CNVFRC' )
           IF ( isDesc  ) Desc  = 'Convective fraction'
           IF ( isUnits ) Units = '1'
           IF ( isRank  ) Rank  = 2
-
 #endif
 
        CASE ( 'CONVDEPTH' )
@@ -3533,9 +4870,9 @@ CONTAINS
           IF ( isUnits ) Units = 'hours'
           IF ( isRank  ) Rank  = 2
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! 3-D Fields
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        CASE ( 'AD' )
           IF ( isDesc  ) Desc  = 'Dry air mass'
           IF ( isUnits ) Units = 'kg'
@@ -3806,11 +5143,13 @@ CONTAINS
           IF ( isRank  ) Rank  = 3
           IF ( isVLoc  ) VLoc  = VLocationCenter
 
+#ifdef MODEL_GEOS
        CASE ( 'UPDVVEL' )
           IF ( isDesc  ) Desc  = 'Updraft vertical velocity'
           IF ( isUnits ) Units = 'hPa s-1'
           IF ( isRank  ) Rank  = 3
           IF ( isVLoc  ) VLoc  = VLocationCenter
+#endif
 
        CASE ( 'V' )
           IF ( isDesc  ) Desc  = 'North-south component of wind'
@@ -3818,64 +5157,61 @@ CONTAINS
           IF ( isRank  ) Rank  = 3
           IF ( isVLoc  ) VLoc  = VLocationCenter
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! Offline land type, leaf area index, and chlorophyll fields
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        CASE ( 'IREG' )
-          IF ( isDesc  ) Desc  = 'Number of Olson land types in each grid box'
-          IF ( isUnits ) Units = '1'
-          IF ( isRank  ) Rank  = 2
-          IF ( isType  ) Type  = KINDVAL_I4
+          IF ( isDesc  ) Desc   = 'Number of Olson land types in each grid box'
+          IF ( isUnits ) Units  = '1'
+          IF ( isRank  ) Rank   = 2
+          IF ( isType  ) Type   = KINDVAL_I4
 
        CASE ( 'ILAND' )
-          IF ( isDesc  ) Desc  = 'Olson land type indices in each grid box'
-          IF ( isUnits ) Units = '1'
-          IF ( isRank  ) Rank  = 3
-          IF ( isType  ) Type  = KINDVAL_I4
+          IF ( isDesc  ) Desc   = 'Olson land type indices in each grid box'
+          IF ( isUnits ) Units  = '1'
+          IF ( isRank  ) Rank   = 2
+          IF ( isType  ) Type   = KINDVAL_I4
+          IF ( isQnt   ) perQnt = 'OLSON'
 
        CASE ( 'IUSE' )
-          IF ( isDesc  ) Desc  = 'Fraction (per mil) occupied by each ' // &
-                                 'Olson land type in the grid box'
-          IF ( isUnits ) Units = 'o/oo'
-          IF ( isRank  ) Rank  = 3
-          IF ( isType  ) Type  = KINDVAL_I4
+          IF ( isDesc  ) Desc   = 'Fraction (per mil) occupied by each '  // &
+                                   'Olson land type in the grid box'
+          IF ( isUnits ) Units  = 'o/oo'
+          IF ( isRank  ) Rank   = 2
+          IF ( isType  ) Type   = KINDVAL_I4
+          IF ( isQnt   ) perQnt = 'OLSON'
 
        CASE ( 'XLAI' )
-          IF ( isDesc  ) Desc  = 'MODIS LAI for each Olson land type, ' // &
-                                 'current month'
-          IF ( isUnits ) Units = 'm2 m-2'
-          IF ( isRank  ) Rank  = 3
+          IF ( isDesc  ) Desc   = 'MODIS LAI for each Olson land type, '  // &
+                                  'current month'
+          IF ( isUnits ) Units  = 'm2 m-2'
+          IF ( isRank  ) Rank   = 2
+          IF ( isQnt   ) perQnt = 'OLSON'
 
        CASE ( 'XLAI2' )
-          IF ( isDesc  ) Desc  = 'MODIS LAI for each Olson land type, ' // &
-                                 'next month'
-          IF ( isUnits ) Units = 'm2 m-2'
-          IF ( isRank  ) Rank  = 3
+          IF ( isDesc  ) Desc   = 'MODIS LAI for each Olson land type, '  // &
+                                   'next month'
+          IF ( isUnits ) Units  = 'm2 m-2'
+          IF ( isRank  ) Rank   = 2
+          IF ( isQnt   ) perQnt = 'OLSON'
 
        CASE ( 'MODISLAI' )
-          IF ( isDesc  ) Desc  = 'Daily LAI computed from monthly ' // &
+          IF ( isDesc  ) Desc   = 'Daily LAI computed from monthly '      // &
                                  'offline MODIS values'
-          IF ( isUnits ) Units = 'm2 m-2'
-          IF ( isRank  ) Rank  = 2
+          IF ( isUnits ) Units  = 'm2 m-2'
+          IF ( isRank  ) Rank   = 2
 
        CASE ( 'LANDTYPEFRAC' )
-          IF ( isDesc  ) Desc  = 'Olson fraction per land type'
-          IF ( isUnits ) Units = '1'
-          IF ( isRank  ) Rank  = 3
+          IF ( isDesc  ) Desc   = 'Olson fraction per land type'
+          IF ( isUnits ) Units  = '1'
+          IF ( isRank  ) Rank   = 2
+          IF ( isQnt   ) perQnt = 'OLSON'
 
        CASE ( 'XLAINATIVE' )
-          IF ( isDesc  ) Desc  = 'Average LAI per Olson land type'
-          IF ( isUnits ) Units = 'm2 m-2'
-          IF ( isRank  ) Rank  = 3
-
-       !--------------------------------------------------------------------
-       ! Age of air for diagnosing transport
-       !--------------------------------------------------------------------
-       CASE ( 'AGEOFAIR' )
-          IF ( isDesc  ) Desc  = 'Age of air'
-          IF ( isUnits ) Units = 's'
-          IF ( isRank  ) Rank  = 3
-          IF ( isVLoc  ) VLoc  = VLocationCenter
+          IF ( isDesc  ) Desc   = 'Average LAI per Olson land type'
+          IF ( isUnits ) Units  = 'm2 m-2'
+          IF ( isRank  ) Rank   = 2
+          IF ( isQnt   ) perQnt = 'OLSON'
 
 !       CASE ( 'INCHEMGRID' )
 !          IF ( isDesc  ) Desc  = 'Is each grid box in the chemistry grid?'
@@ -3913,159 +5249,1027 @@ CONTAINS
 !------------------------------------------------------------------------------
 !BOP
 !
-! !IROUTINE: Register_MetField_Rfp_2D
+! !IROUTINE: Init_and_Register_R4_2D
 !
-! !DESCRIPTION: Registers a 2-D State\_Met field (flexible precision).
+! !DESCRIPTION: Allocates the data array for a State_Met field,
+!  and also adds the field into the State_Chm registry.
+!  This particular routine is for 4-byte, 2-dimensional array fields.
 !\\
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Register_MetField_Rfp_2D( am_I_Root, metadataID, Ptr2Data,      &
-                                       State_Met, RC                        )
+  SUBROUTINE Init_and_Register_R4_2D( Input_Opt, State_Met, State_Grid,      &
+                                      Ptr2Data,  metId,     RC,              &
+                                      noRegister                            )
 !
 ! !USES:
 !
-    USE Registry_Params_Mod
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,           INTENT(IN)    :: am_I_Root       ! Root CPU?
-    CHARACTER(LEN=*),  INTENT(IN)    :: metadataID      ! Name
-    REAL(fp),          POINTER       :: Ptr2Data(:,:)   ! pointer to met
-    TYPE(MetState),    INTENT(IN)    :: State_Met       ! Obj for met state
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+    TYPE(GrdState),   INTENT(IN)  :: State_Grid          ! Grid State
+    CHARACTER(LEN=*), INTENT(IN)  :: metId               ! Field name
+    LOGICAL,          OPTIONAL    :: noRegister          ! Exit after init
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    REAL(f4),         POINTER     :: Ptr2Data(:,:)       ! Pointer to data
 !
 ! !OUTPUT PARAMETERS:
 !
-    INTEGER,           INTENT(OUT)   :: RC              ! Success/failure
-!
-! !REMARKS:
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
 !
 ! !REVISION HISTORY:
-!  07 Sep 2017 - E. Lundgren - Initial version
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 !
 ! !LOCAL VARIABLES:
 !
-    CHARACTER(LEN=512)     :: ErrMsg
-    CHARACTER(LEN=255)     :: desc,  units, ErrMsg_reg, ThisLoc
-    INTEGER                :: rank,  type,  vloc
-    LOGICAL                :: found
+    ! Scalars
+    LOGICAL            :: doRegister
 
-    !---------------------
+    ! Arrays
+    INTEGER            :: dims(2)
+
+    ! Strings
+    CHARACTER(LEN=255) :: arrayId
+
+    !========================================================================
+    ! Init_and_Register_R4_2D begins here!
+    !========================================================================
+
     ! Initialize
-    !---------------------
     RC      = GC_SUCCESS
-    ThisLoc = ' -> at Register_MetField_Rfp_2D (in Headers/state_met_mod.F90)'
-    ErrMsg  = ''
-    ErrMsg_reg = 'Error encountered while registering State_Met%'
+    arrayId = 'State_Met%' // TRIM( metId )
 
-    !---------------------
-    ! Get metadata
-    !---------------------
-    CALL Get_Metadata_State_Met( am_I_Root, metadataID,  found, RC,          &
-                                 desc=desc, units=units, rank=rank,          &
-                                 type=type, vloc=vloc                       )
-
-    ! Trap potential errors
-    IF ( RC /= GC_SUCCESS ) THEN
-       ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //                  &
-                '; Abnormal exit from routine "Get_Metadata_State_Met"!'
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
-       RETURN
+    IF ( PRESENT( noRegister ) ) THEN
+       doRegister = ( .not. noRegister )
+    ELSE
+       doRegister = .TRUE.
     ENDIF
 
-    !---------------------
-    ! Check dimensions
-    !---------------------
-    IF ( rank /= 2 ) THEN
-       ErrMsg = 'Data and metadata rank do not match for ' // TRIM(metadataID)
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
-       RETURN
+    !========================================================================
+    ! Allocate the field array (if it hasn't already been allocated)
+    !========================================================================
+    IF ( .not. ASSOCIATED( Ptr2Data ) ) THEN
+
+       ! Get array dimensions
+       dims(1) = State_Grid%NX
+       dims(2) = State_Grid%NY
+
+       ! Allocate the array
+       ALLOCATE( Ptr2Data( dims(1), dims(2) ), STAT=RC )
+       CALL GC_CheckVar( arrayId, 0, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       Ptr2Data = 0.0_f4
+
     ENDIF
 
-    !---------------------
-    ! Add to registry
-    !---------------------
-    CALL Registry_AddField( am_I_Root   = am_I_Root,                         &
-                            Registry    = State_Met%Registry,                &
-                            State       = State_Met%State,                   &
-                            Variable    = TRIM( MetadataID ),                &
-                            Units       = TRIM( Units      ),                &
-                            Description = TRIM( Desc       ),                &
-                            Data2d      = Ptr2Data,                          &
-                            RC          = RC                                )
-
-    ! Trap potential errors
-    IF ( RC /= GC_SUCCESS ) THEN
-       ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //                  &
-                '; Abnormal exit from routine "Registry_AddField"!'
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
-       RETURN
+    !========================================================================
+    ! Register the field (unless we explicitly say not to)
+    !========================================================================
+    IF ( doRegister ) THEN
+       CALL Register_MetField( Input_Opt, metId, Ptr2Data, State_Met, RC )
+       CALL GC_CheckVar( arrayId, 1, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
     ENDIF
 
-  END SUBROUTINE Register_MetField_Rfp_2D
+  END SUBROUTINE Init_and_Register_R4_2D
 !EOC
 !------------------------------------------------------------------------------
 !                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
-! !IROUTINE: Register_MetField_Rfp_3D
+! !IROUTINE: Init_and_Register_R4_3D
 !
-! !DESCRIPTION: Registers a 3-D State\_Met field (flexible precision).
+! !DESCRIPTION: Allocates the data array for a State_Met field,
+!  and also adds the field into the State_Chm registry.
+!  This particular routine is for 4-byte, 3-dimensional array fields.
 !\\
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Register_MetField_Rfp_3D( am_I_Root, metadataID, Ptr2Data,      &
-                                       State_Met, RC                        )
+  SUBROUTINE Init_and_Register_R4_3D( Input_Opt,  State_Met, State_Grid,     &
+                                      Ptr2Data,   metId,     RC,             &
+                                      noRegister, onEdges,   zxyOrder,       &
+                                      nSlots                                )
 !
 ! !USES:
 !
-    USE Registry_Params_Mod
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,           INTENT(IN)    :: am_I_Root       ! Root CPU?
-    CHARACTER(LEN=*),  INTENT(IN)    :: metadataID      ! Name
-    REAL(fp),          POINTER       :: Ptr2Data(:,:,:) ! pointer to met
-    TYPE(MetState),    INTENT(IN)    :: State_Met       ! Obj for met state
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+    TYPE(GrdState),   INTENT(IN)  :: State_Grid          ! Grid State
+    CHARACTER(LEN=*), INTENT(IN)  :: metId               ! Field name
+    LOGICAL,          OPTIONAL    :: noRegister          ! Exit after init
+    LOGICAL,          OPTIONAL    :: onEdges             ! Data on vert edges?
+    LOGICAL,          OPTIONAL    :: zxyOrder            ! Data array (Z,X,Y)?
+    INTEGER,          OPTIONAL    :: nSlots              ! # slots for Z dim
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    REAL(f4),         POINTER     :: Ptr2Data(:,:,:)     ! Pointer to data
 !
 ! !OUTPUT PARAMETERS:
 !
-    INTEGER,           INTENT(OUT)   :: RC              ! Success/failure
-!
-! !REMARKS:
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
 !
 ! !REVISION HISTORY:
-!  07 Sep 2017 - E. Lundgren - Initial version
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 !
 ! !LOCAL VARIABLES:
 !
-    CHARACTER(LEN=512)     :: ErrMsg
-    CHARACTER(LEN=255)     :: desc,  units,  ErrMsg_reg, ThisLoc
-    INTEGER                :: rank,  type,   vloc
-    LOGICAL                :: found, onEdges
+    ! Scalars
+    LOGICAL            :: doEdges, doRegister, doSlots, doZxy
 
-    !---------------------
+    ! Arrays
+    INTEGER            :: dims(3)
+
+    ! Strings
+    CHARACTER(LEN=255) :: arrayId
+
+    !========================================================================
+    ! Init_and_Register_R4_3D begins here!
+    !========================================================================
+
     ! Initialize
-    !---------------------
     RC      = GC_SUCCESS
-    ThisLoc = ' -> at Register_MetField_Rfp_3D (in Headers/state_met_mod.F90)'
-    ErrMsg  = ''
-    ErrMsg_reg = 'Error encountered while registering State_Met%'
+    arrayId = 'State_Met%' // TRIM( metId )
 
-    !---------------------
+    IF ( PRESENT( onEdges ) ) THEN
+       doEdges = onEdges
+    ELSE
+       doEdges = .FALSE.
+    ENDIF
+
+    IF ( PRESENT( noRegister ) ) THEN
+       doRegister = ( .not. noRegister )
+    ELSE
+       doRegister = .TRUE.
+    ENDIF
+
+    doSlots = PRESENT( nSlots )
+
+    IF ( PRESENT( zxyOrder ) ) THEN
+       doZxy = zxyOrder
+    ELSE
+       doZxy = .FALSE.
+    ENDIF
+
+    !========================================================================
+    ! Allocate the field array (if it hasn't already been allocated)
+    !========================================================================
+    IF ( .not. ASSOCIATED( Ptr2Data ) ) THEN
+
+       ! Get array ID and dimensions
+       IF ( doZxy ) THEN
+
+          ! ZXY order
+          dims(1) = State_Grid%NZ
+          dims(2) = State_Grid%NX
+          dims(3) = State_Grid%NY
+
+          ! If we have specified nSlots, use that for 1st dimension
+          ! Otherwise, if data is on vertical edges, increment 1st dimension
+          IF ( doSlots ) THEN
+             dims(1) = nSlots
+          ELSE
+             IF ( doEdges ) dims(1) = dims(1) + 1
+          ENDIF
+
+       ELSE
+
+          ! XYZ order
+          dims(1) = State_Grid%NX
+          dims(2) = State_Grid%NY
+          dims(3) = State_Grid%NZ
+
+          ! If we have specified nSlots, use that for 3rd dimension
+          ! Otherwise, if data is on vertical edges, increment 3rd dimension
+          IF ( doSlots ) THEN
+             dims(3) = nSlots
+          ELSE
+             IF ( doEdges ) dims(3) = dims(3) + 1
+          ENDIF
+
+       ENDIF
+
+       ! Allocate the array
+       ALLOCATE( Ptr2Data( dims(1), dims(2), dims(3) ), STAT=RC )
+       CALL GC_CheckVar( arrayId, 0, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       Ptr2Data = 0.0_f4
+
+    ENDIF
+
+    !========================================================================
+    ! Register the field (unless we explicitly say not to)
+    !========================================================================
+    IF ( doRegister ) THEN
+       CALL Register_MetField( Input_Opt, metId, Ptr2Data, State_Met, RC )
+       CALL GC_CheckVar( arrayId, 1, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+    ENDIF
+
+  END SUBROUTINE Init_and_Register_R4_3D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Init_and_Register_R8_2D
+!
+! !DESCRIPTION: Allocates the data array for a State_Chm field,
+!  and also adds the field into the State_Chm registry.
+!  This particular routine is for 8-byte, 2-dimensional fields.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Init_and_Register_R8_2D( Input_Opt, State_Met, State_Grid,      &
+                                      Ptr2Data,  metId,     RC,              &
+                                      noRegister                            )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+    TYPE(GrdState),   INTENT(IN)  :: State_Grid          ! Grid State
+    CHARACTER(LEN=*), INTENT(IN)  :: metId               ! Field name
+    LOGICAL,          OPTIONAL    :: noRegister          ! Exit after init
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    REAL(f8),         POINTER     :: Ptr2Data(:,:)       ! Pointer to data
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
+!
+! !REVISION HISTORY:
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    LOGICAL            :: doRegister
+
+    ! Arrays
+    INTEGER            :: dims(2)
+
+    ! Strings
+    CHARACTER(LEN=255) :: arrayId
+
+    !=======================================================================
+    ! Init_and_Register_R8_2D begins here!
+    !=======================================================================
+
+    ! Initialize
+    RC      = GC_SUCCESS
+    arrayId = 'State_Met%' // TRIM( metId )
+
+    IF ( PRESENT( noRegister ) ) THEN
+       doRegister = ( .not. noRegister )
+    ELSE
+       doRegister = .TRUE.
+    ENDIF
+
+    !=======================================================================
+    ! Allocate the field array (if it hasn't already been allocated)
+    !=======================================================================
+    IF ( .not. ASSOCIATED( Ptr2Data ) ) THEN
+
+       ! Get array dimensions
+       dims(1) = State_Grid%NX
+       dims(2) = State_Grid%NY
+
+       ! Allocate the data
+       ALLOCATE( Ptr2Data( dims(1), dims(2) ), STAT=RC )
+       CALL GC_CheckVar( arrayId, 0, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       Ptr2Data = 0.0_f8
+
+    ENDIF
+
+    !=======================================================================
+    ! Register the field
+    !=======================================================================
+    IF ( doRegister ) THEN
+       CALL Register_MetField( Input_Opt, metId, Ptr2Data, State_Met, RC )
+       CALL GC_CheckVar( arrayId, 1, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+    ENDIF
+
+  END SUBROUTINE Init_and_Register_R8_2D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Init_and_Register_R8_3D
+!
+! !DESCRIPTION: Allocates the data array for a State_Chm field,
+!  and also adds the field into the State_Chm registry.
+!  This particular routine is for 8-byte, 2-dimensional arrays.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Init_and_Register_R8_3D( Input_Opt,  State_Met, State_Grid,     &
+                                      Ptr2Data,   metId,     RC,             &
+                                      noRegister, onEdges,   zxyOrder,       &
+                                      nSlots                                )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+    TYPE(GrdState),   INTENT(IN)  :: State_Grid          ! Grid State
+    CHARACTER(LEN=*), INTENT(IN)  :: metId               ! Field name
+    LOGICAL,          OPTIONAL    :: noRegister          ! Exit after init
+    LOGICAL,          OPTIONAL    :: onEdges             ! Data on vert edges?
+    LOGICAL,          OPTIONAL    :: zxyOrder            ! Data array (Z,X,Y)?
+    INTEGER,          OPTIONAL    :: nSlots              ! # slots, Z dim
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    REAL(f8),         POINTER     :: Ptr2Data(:,:,:)     ! Pointer to data
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
+!
+! !REVISION HISTORY:
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    LOGICAL            :: doEdges, doRegister, doSlots, doZxy
+
+    ! Arrays
+    INTEGER            :: dims(3)
+
+
+    ! Strings
+    CHARACTER(LEN=255) :: arrayId
+
+    !========================================================================
+    ! Init_and_Register_R4_2D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC      = GC_SUCCESS
+    arrayId = 'State_Met%' // TRIM( metId )
+
+    IF ( PRESENT( onEdges ) ) THEN
+       doEdges = onEdges
+    ELSE
+       doEdges = .FALSE.
+    ENDIF
+
+    IF ( PRESENT( noRegister ) ) THEN
+       doRegister = ( .not. noRegister )
+    ELSE
+       doRegister = .TRUE.
+    ENDIF
+
+    doSlots = PRESENT( nSlots )
+
+    IF ( PRESENT( zxyOrder ) ) THEN
+       doZxy = zxyOrder
+    ELSE
+       doZxy = .FALSE.
+    ENDIF
+
+    !========================================================================
+    ! Allocate the field array (if it hasn't already been allocated)
+    !========================================================================
+    IF ( .not. ASSOCIATED( Ptr2Data ) ) THEN
+
+       ! Get array ID and dimensions
+       IF ( doZxy ) THEN
+
+          ! ZXY order
+          dims(1) = State_Grid%NZ
+          dims(2) = State_Grid%NX
+          dims(3) = State_Grid%NY
+
+          ! If we have specified nSlots, use that for 1st dimension
+          ! Otherwise, if data is on vertical edges, increment 1st dimension
+          IF ( doSlots ) THEN
+             dims(1) = nSlots
+          ELSE
+             IF ( doEdges ) dims(1) = dims(1) + 1
+          ENDIF
+
+       ELSE
+
+          ! XYZ order
+          dims(1) = State_Grid%NX
+          dims(2) = State_Grid%NY
+          dims(3) = State_Grid%NZ
+
+          ! If we have specified nSlots, use that for 3rd dimension
+          ! Otherwise, if data is on vertical edges, increment 3rd dimension
+          IF ( doSlots ) THEN
+             dims(3) = nSlots
+          ELSE
+             IF ( doEdges ) dims(3) = dims(3) + 1
+          ENDIF
+
+       ENDIF
+
+       ! Allocate the array
+       ALLOCATE( Ptr2Data( dims(1), dims(2), dims(3) ), STAT=RC )
+       CALL GC_CheckVar( arrayId, 0, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       Ptr2Data = 0.0_f8
+
+    ENDIF
+
+    !========================================================================
+    ! Register the field (unless we explicitly say not to)
+    !========================================================================
+    IF ( doRegister ) THEN
+       CALL Register_MetField( Input_Opt, metId, Ptr2Data, State_Met, RC )
+       CALL GC_CheckVar( arrayId, 1, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+    ENDIF
+
+  END SUBROUTINE Init_and_Register_R8_3D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Init_and_Register_Log_2D
+!
+! !DESCRIPTION: Allocates the data array for a State_Chm field.
+!  This particular routine is for logical, 2-dimensional arrays.
+!  NOTE: At present, it is not possible to archive logical fields
+!  to HISTORY diagnostics, so we will skip registering logical fields.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Init_and_Register_Log_2D( Input_Opt, State_Met, State_Grid,     &
+                                       Ptr2Data,  metId,     RC,             &
+                                       noRegister                           )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+    TYPE(GrdState),   INTENT(IN)  :: State_Grid          ! Grid State
+    CHARACTER(LEN=*), INTENT(IN)  :: metId               ! Field name
+    LOGICAL,          OPTIONAL    :: noRegister          ! Exit after init
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    LOGICAL,          POINTER     :: Ptr2Data(:,:)       ! Pointer to data
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
+!
+! !REVISION HISTORY:
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    INTEGER            :: NX, NY
+    LOGICAL            :: doRegister
+
+    ! Strings
+    CHARACTER(LEN=255) :: arrayId
+
+    !========================================================================
+    ! Init_and_Register_Log_2D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC      = GC_SUCCESS
+    arrayId = 'State_Met%' // TRIM( metId )
+
+    !========================================================================
+    ! Allocate the field array
+    !========================================================================
+    IF ( .not. ASSOCIATED( Ptr2Data ) ) THEN
+
+       ! Get array dimensions
+       NX = State_Grid%NX
+       NY = State_Grid%NY
+
+       ALLOCATE( Ptr2Data( NX, NY ), STAT=RC )
+       CALL GC_CheckVar( arrayId, 0, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       Ptr2Data = .FALSE.
+    ENDIF
+
+  END SUBROUTINE Init_and_Register_Log_2D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Init_and_Register_Log_3D
+!
+! !DESCRIPTION: Allocates the data array for a State_Chm field.
+!  This particular routine is for logical, 2-dimensional arrays.
+!  NOTE: At present, it is not possible to archive logical fields
+!  to HISTORY diagnostics, so we will skip registering logical fields.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Init_and_Register_Log_3D( Input_Opt,  State_Met, State_Grid,    &
+                                       Ptr2Data,   metId,     RC,            &
+                                       noRegister, onEdges,   zxyOrder,      &
+                                       nSlots                               )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+    TYPE(GrdState),   INTENT(IN)  :: State_Grid          ! Grid State
+    CHARACTER(LEN=*), INTENT(IN)  :: metId               ! Field name
+    LOGICAL,          OPTIONAL    :: noRegister          ! Exit after init
+    LOGICAL,          OPTIONAL    :: onEdges             ! Data on vert edges?
+    LOGICAL,          OPTIONAL    :: zxyOrder            ! Data array (Z,X,Y)?
+    INTEGER,          OPTIONAL    :: nSlots              ! # slots for Z dim
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    LOGICAL,          POINTER     :: Ptr2Data(:,:,:)     ! Pointer to data
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success/failure!
+!
+! !REVISION HISTORY:
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    LOGICAL            :: doEdges, doRegister, doSlots, doZxy
+
+    ! Arrays
+    INTEGER            :: dims(3)
+
+    ! Strings
+    CHARACTER(LEN=255) :: arrayId
+
+    !========================================================================
+    ! Init_and_Register_Log_2D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC      = GC_SUCCESS
+    arrayId = 'State_Met%' // TRIM( metId )
+
+    IF ( PRESENT( onEdges ) ) THEN
+       doEdges = onEdges
+    ELSE
+       doEdges = .FALSE.
+    ENDIF
+
+    IF ( PRESENT( noRegister ) ) THEN
+       doRegister = ( .not. noRegister )
+    ELSE
+       doRegister = .TRUE.
+    ENDIF
+
+    doSlots = PRESENT( nSlots )
+
+    IF ( PRESENT( zxyOrder ) ) THEN
+       doZxy = zxyOrder
+    ELSE
+       doZxy = .FALSE.
+    ENDIF
+
+    !========================================================================
+    ! Allocate the field array (if it hasn't already been allocated)
+    !========================================================================
+    IF ( .not. ASSOCIATED( Ptr2Data ) ) THEN
+
+       ! Get array ID and dimensions
+       IF ( doZxy ) THEN
+
+          ! ZXY order
+          dims(1) = State_Grid%NZ
+          dims(2) = State_Grid%NX
+          dims(3) = State_Grid%NY
+
+          ! If we have specified nSlots, use that for 1st dimension
+          ! Otherwise, if data is on vertical edges, increment 1st dimension
+          IF ( doSlots ) THEN
+             dims(1) = nSlots
+          ELSE
+             IF ( doEdges ) dims(1) = dims(1) + 1
+          ENDIF
+
+       ELSE
+
+          ! XYZ order
+          dims(1) = State_Grid%NX
+          dims(2) = State_Grid%NY
+          dims(3) = State_Grid%NZ
+
+          ! If we have specified nSlots, use that for 3rd dimension
+          ! Otherwise, if data is on vertical edges, increment 3rd dimension
+          IF ( doSlots ) THEN
+             dims(3) = nSlots
+          ELSE
+             IF ( doEdges ) dims(3) = dims(3) + 1
+          ENDIF
+
+       ENDIF
+
+       ! Allocate the array
+       ALLOCATE( Ptr2Data( dims(1), dims(2), dims(3) ), STAT=RC )
+       CALL GC_CheckVar( arrayId, 0, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       Ptr2Data = .FALSE.
+
+    ENDIF
+
+  END SUBROUTINE Init_and_Register_Log_3D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Init_and_Register_Int_2D
+!
+! !DESCRIPTION: Allocates the data array for a State_Chm field,
+!  and also adds the field into the State_Chm registry.
+!  This particular routine is for integer, 2-dimensional arrays.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Init_and_Register_Int_2D( Input_Opt, State_Met, State_Grid,      &
+                                       Ptr2Data,  metId,     RC,              &
+                                       noRegister                            )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+    TYPE(GrdState),   INTENT(IN)  :: State_Grid          ! Grid State
+    CHARACTER(LEN=*), INTENT(IN)  :: metId               ! Field name
+
+    LOGICAL,          OPTIONAL    :: noRegister          ! Exit after init
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    INTEGER,          POINTER     :: Ptr2Data(:,:)       ! Pointer to data
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
+!
+! !REVISION HISTORY:
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    LOGICAL            :: doRegister
+
+    ! Arrays
+    INTEGER            :: dims(2)
+
+    ! Strings
+    CHARACTER(LEN=255) :: arrayId
+
+    !========================================================================
+    ! Init_and_Register_Int_2D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC      = GC_SUCCESS
+    arrayId = 'State_Met%' // TRIM( metId )
+
+    IF ( PRESENT( noRegister ) ) THEN
+       doRegister = ( .not. noRegister )
+    ELSE
+       doRegister = .TRUE.
+    ENDIF
+
+    !========================================================================
+    ! Allocate the field array
+    !========================================================================
+    IF ( .not. ASSOCIATED( Ptr2Data ) ) THEN
+
+       ! Get array dimensions
+       dims(1) = State_Grid%NX
+       dims(2) = State_Grid%NY
+
+       ALLOCATE( Ptr2Data( dims(1), dims(2) ), STAT=RC )
+       CALL GC_CheckVar( arrayId, 0, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       Ptr2Data = 0
+    ENDIF
+
+    !========================================================================
+    ! Register the field
+    !========================================================================
+    IF ( doRegister ) THEN
+       CALL Register_MetField( Input_Opt, metId, Ptr2Data, State_Met, RC )
+       CALL GC_CheckVar( arrayId, 1, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+    ENDIF
+
+  END SUBROUTINE Init_and_Register_Int_2D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Init_and_Register_Int_3D
+!
+! !DESCRIPTION: Allocates the data array for a State_Met field,
+!  and also adds the field into the State_Met registry.
+!  This particular routine is for integer, 3-dimensional arrays.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Init_and_Register_Int_3D( Input_Opt,  State_Met, State_Grid,    &
+                                       Ptr2Data,   metId,     RC,            &
+                                       noRegister, onEdges,   zxyOrder,      &
+                                       nSlots                               )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,  ONLY : OptInput
+    USE State_Grid_Mod, ONLY : GrdState
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+    TYPE(GrdState),   INTENT(IN)  :: State_Grid          ! Grid State
+    CHARACTER(LEN=*), INTENT(IN)  :: metId               ! Field name
+    LOGICAL,          OPTIONAL    :: noRegister          ! Exit after init
+    LOGICAL,          OPTIONAL    :: onEdges             ! Data on vert edges?
+    LOGICAL,          OPTIONAL    :: zxyOrder            ! Data array (Z,X,Y)?
+    INTEGER,          OPTIONAL    :: nSlots              ! # slots for Z dim
+!
+! !INPUT/OUTPUT PARAMETERS:
+!
+    INTEGER,          POINTER     :: Ptr2Data(:,:,:)     ! Pointer to data
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success/failure!
+!
+! !REVISION HISTORY:
+!  21 Sep 2020 - R. Yantosca - Initial version
+!  See the subsequent Git history with the gitk browser!
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    LOGICAL            :: doEdges, doRegister, doSlots, doZxy
+
+    ! Arrays
+    INTEGER            :: dims(3)
+
+    ! Strings
+    CHARACTER(LEN=255) :: arrayId
+
+    !========================================================================
+    ! Init_and_Register_Int_2D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC      = GC_SUCCESS
+    arrayId = 'State_Met%' // TRIM( metId )
+
+    IF ( PRESENT( onEdges ) ) THEN
+       doEdges = onEdges
+    ELSE
+       doEdges = .FALSE.
+    ENDIF
+
+    doSlots = PRESENT( nSlots )
+
+    IF ( PRESENT( noRegister ) ) THEN
+       doRegister = ( .not. noRegister )
+    ELSE
+       doRegister = .TRUE.
+    ENDIF
+
+    IF ( PRESENT( zxyOrder ) ) THEN
+       doZxy = zxyOrder
+    ELSE
+       doZxy = .FALSE.
+    ENDIF
+
+    !========================================================================
+    ! Allocate the field array (if it hasn't already been allocated)
+    !========================================================================
+    IF ( .not. ASSOCIATED( Ptr2Data ) ) THEN
+
+       ! Get array ID and dimensions
+       IF ( doZxy ) THEN
+
+          ! ZXY order
+          dims(1) = State_Grid%NZ
+          dims(2) = State_Grid%NX
+          dims(3) = State_Grid%NY
+
+          ! If we have specified nSlots, use that for 1st dimension
+          ! Otherwise, if data is on vertical edges, increment 1st dimension
+          IF ( doSlots ) THEN
+             dims(1) = nSlots
+          ELSE
+             IF ( doEdges ) dims(1) = dims(1) + 1
+          ENDIF
+
+       ELSE
+
+          ! XYZ order
+          dims(1) = State_Grid%NX
+          dims(2) = State_Grid%NY
+          dims(3) = State_Grid%NZ
+
+          ! If we have specified nSlots, use that for 3rd dimension
+          ! Otherwise, if data is on vertical edges, increment 3rd dimension
+          IF ( doSlots ) THEN
+             dims(3) = nSlots
+          ELSE
+             IF ( doEdges ) dims(3) = dims(3) + 1
+          ENDIF
+
+       ENDIF
+
+       ! Allocate the array
+       ALLOCATE( Ptr2Data( dims(1), dims(2), dims(3) ), STAT=RC )
+       CALL GC_CheckVar( arrayId, 0, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+       Ptr2Data = 0
+
+    ENDIF
+
+    !========================================================================
+    ! Register the field (unless we explicitly say not to)
+    !========================================================================
+    IF ( doRegister ) THEN
+       CALL Register_MetField( Input_Opt, metId, Ptr2Data, State_Met, RC )
+       CALL GC_CheckVar( arrayId, 1, RC )
+       IF ( RC /= GC_SUCCESS ) RETURN
+    ENDIF
+
+  END SUBROUTINE Init_and_Register_Int_3D
+!
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Register_MetField_R4_2D
+!
+! !DESCRIPTION: Registers a 2-D State\_Met field (4-byte real).
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Register_MetField_R4_2D( Input_Opt, metadataID, Ptr2Data,       &
+                                      State_Met, RC                         )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,      ONLY : OptInput
+    USE Registry_Params_Mod
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    CHARACTER(LEN=*), INTENT(IN)  :: metadataID          ! Field name
+    REAL(f4),         POINTER     :: Ptr2Data(:,:)       ! Pointer to array
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
+!
+! !REVISION HISTORY:
+!  07 Sep 2017 - E. Lundgren - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    INTEGER            :: rank,  type,       vloc
+    LOGICAL            :: found
+
+    ! Strings
+    CHARACTER(LEN=255) :: desc,  ErrMsg_reg, units, ThisLoc
+    CHARACTER(LEN=512) :: ErrMsg
+
+    !========================================================================
+    ! Register_MetField_R4_2D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC         = GC_SUCCESS
+    ErrMsg     = ''
+    ErrMsg_reg = 'Error encountered while registering State_Met%'
+    ThisLoc    = &
+      ' -> at Register_MetField_R4_2D (in Headers/state_met_mod.F90)'
+
+    !========================================================================
     ! Get metadata
-    !---------------------
-    CALL Get_Metadata_State_Met( am_I_Root, metadataID,  found, RC,          &
-                                 desc=desc, units=units, rank=rank,          &
-                                 type=type, vloc=vloc )
+    !========================================================================
+    CALL Get_MetaData_State_Met(                                             &
+         am_I_Root  = Input_Opt%amIRoot,                                     &
+         metadataId = metadataId,                                            &
+         found      = found,                                                 &
+         desc       = desc,                                                  &
+         units      = units,                                                 &
+         rank       = rank,                                                  &
+         type       = type,                                                  &
+         vloc       = vloc,                                                  &
+         RC         = RC                                                    )
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
@@ -4075,11 +6279,120 @@ CONTAINS
        RETURN
     ENDIF
 
-    !---------------------
+    !========================================================================
     ! Check dimensions
-    !---------------------
-    IF ( rank /= 3 ) THEN
+    !========================================================================
+    IF ( rank /= 2 ) THEN
        ErrMsg = 'Data and metadata rank do not match for ' // TRIM(metadataID)
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+    !========================================================================
+    ! Register the entire 2-D field
+    !========================================================================
+    CALL Registry_AddField(                                                  &
+         Input_Opt   = Input_Opt,                                            &
+         Registry    = State_Met%Registry,                                   &
+         State       = State_Met%State,                                      &
+         Variable    = TRIM( MetadataID ),                                   &
+         Units       = TRIM( Units      ),                                   &
+         Description = TRIM( Desc       ),                                   &
+         Data2d_4    = Ptr2Data,                                             &
+         RC          = RC                                                   )
+
+    ! Trap potential errors
+    IF ( RC /= GC_SUCCESS ) THEN
+       ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //               &
+          '; Abnormal exit from routine "Registry_AddField"!'
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+  END SUBROUTINE Register_MetField_R4_2D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Register_MetField_R4_3D
+!
+! !DESCRIPTION: Registers a 3-D State\_Met field (4-byte real).
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Register_MetField_R4_3D( Input_Opt, metadataID, Ptr2Data,       &
+                                      State_Met, RC                         )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,      ONLY : OptInput
+    USE Registry_Params_Mod
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    CHARACTER(LEN=*), INTENT(IN)  :: metadataID          ! Field name
+    REAL(f4),         POINTER     :: Ptr2Data(:,:,:)     ! Pointer to data
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success/failure
+!
+! !REVISION HISTORY:
+!  07 Sep 2017 - E. Lundgren - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    INTEGER            :: rank,     type,     vloc,       N
+    LOGICAL            :: found,    onEdges
+
+    ! Strings
+    CHARACTER(LEN=2  ) :: numStr
+    CHARACTER(LEN=512) :: errMsg
+    CHARACTER(LEN=255) :: desc,     units,    errMsg_reg
+    CHARACTER(LEN=255) :: thisDesc, thisName, ThisLoc,    perQnt
+
+    !========================================================================
+    ! Register_MetField_R4_3D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC         = GC_SUCCESS
+    thisName   = ''
+    thisDesc   = ''
+    ErrMsg     = ''
+    ErrMsg_reg = 'Error encountered while registering State_Met%'
+    ThisLoc    = &
+         ' -> at Register_MetField_R4_3D (in Headers/state_met_mod.F90)'
+
+    !========================================================================
+    ! Get metadata
+    !========================================================================
+    CALL Get_MetaData_State_Met(                                             &
+         am_I_Root  = Input_Opt%amIRoot,                                     &
+         metadataId = metadataId,                                            &
+         found      = found,                                                 &
+         desc       = desc,                                                  &
+         units      = units,                                                 &
+         rank       = rank,                                                  &
+         type       = type,                                                  &
+         vloc       = vloc,                                                  &
+         perQnt     = perQnt,                                                &
+         RC         = RC                                                    )
+
+    ! Trap potential errors
+    IF ( RC /= GC_SUCCESS ) THEN
+       ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //                  &
+                '; Abnormal exit from routine "Get_Metadata_State_Met"!'
        CALL GC_Error( ErrMsg, RC, ThisLoc )
        RETURN
     ENDIF
@@ -4087,28 +6400,350 @@ CONTAINS
     ! Is the data placed on vertical edges?
     onEdges = ( vLoc == vLocationEdge )
 
-    !---------------------
-    ! Add to registry
-    !---------------------
-    CALL Registry_AddField( am_I_Root    = am_I_Root,                        &
-                            Registry     = State_Met%Registry,               &
-                            State        = State_Met%State,                  &
-                            Variable     = TRIM( MetadataID ),               &
-                            Units        = TRIM( Units      ),               &
-                            Description  = TRIM( Desc       ),               &
-                            OnLevelEdges = onEdges,                          &
-                            Data3d       = Ptr2Data,                         &
-                            RC           = RC                               )
+    !========================================================================
+    ! If there is an Olson landtype dimension,
+    ! then register each land type as a 2-D field
+    !========================================================================
+    IF ( TRIM( perQnt ) == 'OLSON' ) THEN
+
+       ! Check dimensions
+       IF ( rank /= 2 ) THEN
+          ErrMsg = &
+             'Data and metadata rank do not match for ' // TRIM(metadataID)
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
+
+       ! Loop over # of Olson types
+       DO N = 1, NSURFTYPE
+
+          ! Append the Olson land type index (zero based)
+          ! to the name & description from the metadata
+          WRITE( numStr, '(I2.2)') N - 1
+          thisName = TRIM( metaDataId )        // numStr
+          thisDesc = TRIM( desc       ) // " " // numStr
+
+          ! Register each 2-D field per Olson landtype separately
+          CALL Registry_AddField(                                            &
+               Input_Opt    = Input_Opt,                                     &
+               Registry     = State_Met%Registry,                            &
+               State        = State_Met%State,                               &
+               Variable     = TRIM( thisName   ),                            &
+               Description  = TRIM( thisDesc   ),                            &
+               Units        = TRIM( Units      ),                            &
+               Data2d_4     = Ptr2Data(:,:,N),                               &
+               RC           = RC                                            )
+       ENDDO
+
+    !========================================================================
+    ! Otherwise, register as a single 3-D field
+    !========================================================================
+    ELSE
+
+       ! Check dimensions
+       IF ( rank /= 3 ) THEN
+          ErrMsg = &
+             'Data and metadata rank do not match for ' // TRIM(metadataID)
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
+
+       ! Register the entire field
+       CALL Registry_AddField(                                               &
+            Input_Opt    = Input_Opt,                                        &
+            Registry     = State_Met%Registry,                               &
+            State        = State_Met%State,                                  &
+            Variable     = TRIM( MetadataID ),                               &
+            Description  = TRIM( Desc       ),                               &
+            Units        = TRIM( Units      ),                               &
+            OnLevelEdges = onEdges,                                          &
+            Data3d_4     = Ptr2Data,                                         &
+            RC           = RC                                               )
+
+       ! Trap potential errors
+       IF ( RC /= GC_SUCCESS ) THEN
+          ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //               &
+             '; Abnormal exit from routine "Registry_AddField"!'
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
+    ENDIF
+
+  END SUBROUTINE Register_MetField_R4_3D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Register_MetField_R8_2D
+!
+! !DESCRIPTION: Registers a 2-D State\_Met field (8-byte real).
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Register_MetField_R8_2D( Input_Opt, metadataID, Ptr2Data,      &
+                                      State_Met, RC                        )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,      ONLY : OptInput
+    USE Registry_Params_Mod
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    CHARACTER(LEN=*), INTENT(IN)  :: metadataID          ! Field name
+    REAL(f8),         POINTER     :: Ptr2Data(:,:)       ! Pointer to array
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
+!
+! !REVISION HISTORY:
+!  07 Sep 2017 - E. Lundgren - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    INTEGER            :: rank,  type,       vloc
+    LOGICAL            :: found
+
+    ! Strings
+    CHARACTER(LEN=255) :: desc,  ErrMsg_reg, units, ThisLoc
+    CHARACTER(LEN=512) :: ErrMsg
+
+    !========================================================================
+    ! Register_MetField_R8_2D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC         = GC_SUCCESS
+    ErrMsg     = ''
+    ErrMsg_reg = 'Error encountered while registering State_Met%'
+    ThisLoc    = &
+      ' -> at Register_MetField_R8_2D (in Headers/state_met_mod.F90)'
+
+    !========================================================================
+    ! Get metadata
+    !========================================================================
+    CALL Get_MetaData_State_Met(                                             &
+         am_I_Root  = Input_Opt%amIRoot,                                     &
+         metadataId = metadataId,                                            &
+         found      = found,                                                 &
+         desc       = desc,                                                  &
+         units      = units,                                                 &
+         rank       = rank,                                                  &
+         type       = type,                                                  &
+         vloc       = vloc,                                                  &
+         RC         = RC                                                    )
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
        ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //                  &
-                '; Abnormal exit from routine "Registry_AddField"!'
+                '; Abnormal exit from routine "Get_Metadata_State_Met"!'
        CALL GC_Error( ErrMsg, RC, ThisLoc )
        RETURN
     ENDIF
 
-  END SUBROUTINE Register_MetField_Rfp_3D
+    !========================================================================
+    ! Check dimensions
+    !========================================================================
+    IF ( rank /= 2 ) THEN
+       ErrMsg = 'Data and metadata rank do not match for ' // TRIM(metadataID)
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+    !========================================================================
+    ! Register the 2-D field
+    !========================================================================
+    CALL Registry_AddField(                                                  &
+         Input_Opt   = Input_Opt,                                            &
+         Registry    = State_Met%Registry,                                   &
+         State       = State_Met%State,                                      &
+         Variable    = TRIM( MetadataID ),                                   &
+         Description = TRIM( Desc       ),                                   &
+         Units       = TRIM( Units      ),                                   &
+         Data2d_8    = Ptr2Data,                                             &
+         RC          = RC                                                   )
+
+    ! Trap potential errors
+    IF ( RC /= GC_SUCCESS ) THEN
+       ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //               &
+            '; Abnormal exit from routine "Registry_AddField"!'
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+  END SUBROUTINE Register_MetField_R8_2D
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Register_MetField_R8_3D
+!
+! !DESCRIPTION: Registers a 3-D State\_Met field (8-byte real).
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE Register_MetField_R8_3D( Input_Opt, metadataID, Ptr2Data,        &
+                                      State_Met, RC                          )
+!
+! !USES:
+!
+    USE Input_Opt_Mod,      ONLY : OptInput
+    USE Registry_Params_Mod
+!
+! !INPUT PARAMETERS:
+!
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    CHARACTER(LEN=*), INTENT(IN)  :: metadataID          ! Field name
+    REAL(f8),         POINTER     :: Ptr2Data(:,:,:)     ! Pointer to data
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: RC                  ! Success/failure
+!
+! !REVISION HISTORY:
+!  07 Sep 2017 - E. Lundgren - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    INTEGER            :: rank,     type,     vloc,       N
+    LOGICAL            :: found,    onEdges
+
+    ! Strings
+    CHARACTER(LEN=2  ) :: numStr
+    CHARACTER(LEN=512) :: errMsg
+    CHARACTER(LEN=255) :: desc,     units,    errMsg_reg
+    CHARACTER(LEN=255) :: thisDesc, thisName, ThisLoc,    perQnt
+
+    !========================================================================
+    ! Register_MetField_R8_3D begins here!
+    !========================================================================
+
+    ! Initialize
+    RC         = GC_SUCCESS
+    thisDesc   = ''
+    thisName   = ''
+    errMsg     = ''
+    errMsg_reg = 'Error encountered while registering State_Met%'
+    thisLoc    = &
+       ' -> at Register_MetField_R8_3D (in Headers/state_met_mod.F90)'
+
+    !========================================================================
+    ! Get metadata
+    !========================================================================
+    CALL Get_MetaData_State_Met(                                             &
+         am_I_Root  = Input_Opt%amIRoot,                                     &
+         metadataId = metadataId,                                            &
+         found      = found,                                                 &
+         desc       = desc,                                                  &
+         units      = units,                                                 &
+         rank       = rank,                                                  &
+         type       = type,                                                  &
+         vloc       = vloc,                                                  &
+         perQnt     = perQnt,                                                &
+         RC         = RC                                                    )
+
+    ! Trap potential errors
+    IF ( RC /= GC_SUCCESS ) THEN
+       ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //                  &
+                '; Abnormal exit from routine "Get_Metadata_State_Met"!'
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
+    ! Is the data placed on vertical edges?
+    onEdges = ( vLoc == vLocationEdge )
+
+    !========================================================================
+    ! If there is an Olson landtype dimension,
+    ! then register each land type as a 2-D field
+    !========================================================================
+    IF ( TRIM( perQnt ) == 'OLSON' ) THEN
+
+       ! Check dimensions
+       IF ( rank /= 2 ) THEN
+          ErrMsg = &
+             'Data and metadata rank do not match for ' // TRIM(metadataID)
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
+
+       ! Loop over # of Olson types
+       DO N = 1, NSURFTYPE
+
+          ! Append the Olson land type index (zero-based)
+          ! to the name & description from the metadata
+          WRITE( numStr, '(I2.2)') N - 1
+          thisName = TRIM( metaDataId )        // numStr
+          thisDesc = TRIM( desc       ) // " " // numStr
+
+          ! Register each 2-D field per Olson landtype separately
+          CALL Registry_AddField(                                            &
+               Input_Opt    = Input_Opt,                                     &
+               Registry     = State_Met%Registry,                            &
+               State        = State_Met%State,                               &
+               Variable     = TRIM( thisName   ),                            &
+               Description  = TRIM( thisDesc   ),                            &
+               Units        = TRIM( units      ),                            &
+               Data2d_8     = Ptr2Data(:,:,N),                               &
+               RC           = RC                                            )
+
+       ENDDO
+
+    !========================================================================
+    ! Otherwise, register as a single 3-D field
+    !========================================================================
+    ELSE
+
+       ! Check dimensions
+       IF ( rank /= 3 ) THEN
+          ErrMsg = &
+             'Data and metadata rank do not match for ' // TRIM(metadataID)
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
+
+       ! Register the entire 3-D field
+       CALL Registry_AddField(                                               &
+            Input_Opt    = Input_Opt,                                        &
+            Registry     = State_Met%Registry,                               &
+            State        = State_Met%State,                                  &
+            Variable     = TRIM( MetadataID ),                               &
+            Description  = TRIM( Desc       ),                               &
+            Units        = TRIM( Units      ),                               &
+            OnLevelEdges = onEdges,                                          &
+            Data3d_8     = Ptr2Data,                                         &
+            RC           = RC                                               )
+
+       ! Trap potential errors
+       IF ( RC /= GC_SUCCESS ) THEN
+          ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //               &
+             '; Abnormal exit from routine "Registry_AddField"!'
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
+    ENDIF
+
+  END SUBROUTINE Register_MetField_R8_3D
 !EOC
 !------------------------------------------------------------------------------
 !                  GEOS-Chem Global Chemical Transport Model                  !
@@ -4117,58 +6752,71 @@ CONTAINS
 !
 ! !IROUTINE: Register_MetField_Int_2D
 !
-! !DESCRIPTION: Registers a 2-D State\_Met field (integer precision).
+! !DESCRIPTION: Registers a 2-D State\_Met field (4-byte integer).
 !\\
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Register_MetField_Int_2D( am_I_Root, metadataID, Ptr2Data,      &
+  SUBROUTINE Register_MetField_Int_2D( Input_Opt, metadataID, Ptr2Data,      &
                                        State_Met, RC                        )
 !
 ! !USES:
 !
+    USE Input_Opt_Mod,      ONLY : OptInput
     USE Registry_Params_Mod
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,           INTENT(IN)    :: am_I_Root       ! Root CPU?
-    CHARACTER(LEN=*),  INTENT(IN)    :: metadataID      ! Name
-    INTEGER,           POINTER       :: Ptr2Data(:,:)   ! pointer to met
-    TYPE(MetState),    INTENT(INOUT) :: State_Met       ! Obj for met state
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    CHARACTER(LEN=*), INTENT(IN)  :: metadataID          ! Field name
+    INTEGER,          POINTER     :: Ptr2Data(:,:)       ! Pointer to array
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
 !
 ! !OUTPUT PARAMETERS:
 !
-    INTEGER,           INTENT(OUT)   :: RC               ! Success/failure
-!
-! !REMARKS:
+    INTEGER,          INTENT(OUT) :: RC                  ! Success or failure?
 !
 ! !REVISION HISTORY:
 !  07 Sep 2017 - E. Lundgren - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 !
 ! !LOCAL VARIABLES:
 !
-    CHARACTER(LEN=512)     :: ErrMsg
-    CHARACTER(LEN=255)     :: desc, units, ErrMsg_reg, ThisLoc
-    INTEGER                :: rank, type,  vloc
-    LOGICAL                :: found
+    ! Scalars
+    INTEGER            :: rank,  type,       vloc
+    LOGICAL            :: found, doRegister
 
-    !---------------------
+    ! Strings
+    CHARACTER(LEN=255) :: desc,  errMsg_reg, units, thisLoc
+    CHARACTER(LEN=512) :: errMsg
+
+    !========================================================================
+    ! Register_MetField_Int_2D begins here!
+    !========================================================================
+
     ! Initialize
-    !---------------------
-    RC = GC_SUCCESS
-    ThisLoc = ' -> at Register_MetField_Int_2D (in Headers/state_met_mod.F90)'
-    ErrMsg  = ''
-    ErrMsg_reg = 'Error encountered while registering State_Met%'
+    RC         = GC_SUCCESS
+    errMsg     = ''
+    errMsg_reg = 'Error encountered while registering State_Met%'
+    thisLoc    = &
+      ' -> at Register_MetField_Int_2D (in Headers/state_met_mod.F90)'
 
-    !---------------------
+    !========================================================================
     ! Get metadata
-    !---------------------
-    CALL Get_Metadata_State_Met( am_I_Root, metadataID,  found, RC,          &
-                                 desc=desc, units=units, rank=rank,          &
-                                 type=type, vloc=vloc                       )
+    !========================================================================
+    CALL Get_MetaData_State_Met(                                             &
+         am_I_Root  = Input_Opt%amIRoot,                                     &
+         metadataId = metadataId,                                            &
+         found      = found,                                                 &
+         desc       = desc,                                                  &
+         units      = units,                                                 &
+         rank       = rank,                                                  &
+         type       = type,                                                  &
+         vloc       = vloc,                                                  &
+         RC         = RC                                                    )
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
@@ -4178,32 +6826,33 @@ CONTAINS
        RETURN
     ENDIF
 
-    !---------------------
+    !========================================================================
     ! Check dimensions
-    !---------------------
+    !========================================================================
     IF ( rank /= 2 ) THEN
        ErrMsg = 'Data and metadata rank do not match for ' // TRIM(metadataID)
        CALL GC_Error( ErrMsg, RC, ThisLoc )
        RETURN
     ENDIF
 
-    !---------------------
-    ! Add to registry
-    !---------------------
-    CALL Registry_AddField( am_I_Root   = am_I_Root,                         &
-                            Registry    = State_Met%Registry,                &
-                            State       = State_Met%State,                   &
-                            Variable    = TRIM( metadataID ),                &
-                            units       = TRIM( units      ),                &
-                            Description = TRIM( desc       ),                &
-                            Data2d_I    = Ptr2Data,                          &
-                            RC          = RC                                )
+    !========================================================================
+    ! Register the 2-D field
+    !========================================================================
+    CALL Registry_AddField(                                                  &
+         Input_Opt   = Input_Opt,                                            &
+         Registry    = State_Met%Registry,                                   &
+         State       = State_Met%State,                                      &
+         Variable    = TRIM( MetadataID ),                                   &
+         Description = TRIM( Desc       ),                                   &
+         Units       = TRIM( Units      ),                                   &
+         Data2d_I    = Ptr2Data,                                             &
+         RC          = RC                                                   )
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
-       ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //                  &
-                '; Abnormal exit from routine "Registry_AddField"!'
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       errMsg = TRIM( errMsg_reg ) // TRIM( metadataID ) //                  &
+          '; Abnormal exit from routine "Registry_AddField"!'
+       CALL GC_Error( errMsg, RC, thisLoc )
        RETURN
     ENDIF
 
@@ -4216,58 +6865,76 @@ CONTAINS
 !
 ! !IROUTINE: Register_MetField_Int_3D
 !
-! !DESCRIPTION: Registers a 3-D State\_Met field (integer precision).
+! !DESCRIPTION: Registers a 3-D State\_Met field (4-byte integer).
 !\\
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Register_MetField_Int_3D( am_I_Root, metadataID, Ptr2Data,      &
+  SUBROUTINE Register_MetField_Int_3D( Input_Opt, metadataID, Ptr2Data,      &
                                        State_Met, RC                        )
 !
 ! !USES:
 !
+    USE Input_Opt_Mod,      ONLY : OptInput
     USE Registry_Params_Mod
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,           INTENT(IN)    :: am_I_Root       ! Root CPU?
-    CHARACTER(LEN=*),  INTENT(IN)    :: metadataID      ! Name
-    INTEGER,           POINTER       :: Ptr2Data(:,:,:) ! pointer to met
-    TYPE(MetState),    INTENT(IN)    :: State_Met       ! Obj for met state
+    TYPE(OptInput),   INTENT(IN)  :: Input_Opt           ! Input Options
+    CHARACTER(LEN=*), INTENT(IN)  :: metadataID          ! Field name
+    INTEGER,          POINTER     :: Ptr2Data(:,:,:)     ! Pointer to data
+    TYPE(MetState),   INTENT(IN)  :: State_Met           ! Meteorology State
 !
 ! !OUTPUT PARAMETERS:
 !
-    INTEGER,           INTENT(OUT)   :: RC              ! Success/failure
-!
-! !REMARKS:
+    INTEGER,          INTENT(OUT) :: RC                  ! Success/failure
 !
 ! !REVISION HISTORY:
 !  07 Sep 2017 - E. Lundgren - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 !
 ! !LOCAL VARIABLES:
 !
-    CHARACTER(LEN=512)     :: ErrMsg
-    CHARACTER(LEN=255)     :: desc,   units,  ErrMsg_reg, ThisLoc
-    INTEGER                :: rank,   type,   vloc
-    LOGICAL                :: found,  onEdges
+    ! Scalars
+    INTEGER            :: rank,     type,     vloc,       N
+    LOGICAL            :: found,    onEdges
 
-    !---------------------
+    ! Strings
+    CHARACTER(LEN=2  ) :: numStr
+    CHARACTER(LEN=512) :: errMsg
+    CHARACTER(LEN=255) :: desc,     units,    errMsg_reg
+    CHARACTER(LEN=255) :: thisDesc, thisName, thisLoc,    perQnt
+
+    !========================================================================
+    ! Register_MetField_Int_3D begins here!
+    !========================================================================
+
     ! Initialize
-    !---------------------
-    RC      = GC_SUCCESS
-    ThisLoc = ' -> at Register_MetField_Int_3D (in Headers/state_met_mod.F90)'
-    ErrMsg  = ''
-    ErrMsg_reg = 'Error encountered while registering State_Met%'
+    RC         = GC_SUCCESS
+    thisDesc   = ''
+    thisName   = ''
+    errMsg     = ''
+    errMsg_reg = 'Error encountered while registering State_Met%'
+    thisLoc    = &
+         ' -> at Register_MetField_Int_3D (in Headers/state_met_mod.F90)'
 
-    !---------------------
+    !========================================================================
     ! Get metadata
-    !---------------------
-    CALL Get_Metadata_State_Met( am_I_Root, metadataID,  found, RC,          &
-                                 desc=desc, units=units, rank=rank,          &
-                                 type=type, vloc=vloc                       )
+    !========================================================================
+    CALL Get_MetaData_State_Met(                                             &
+         am_I_Root  = Input_Opt%amIRoot,                                     &
+         metadataId = metadataId,                                            &
+         found      = found,                                                 &
+         desc       = desc,                                                  &
+         units      = units,                                                 &
+         rank       = rank,                                                  &
+         type       = type,                                                  &
+         vloc       = vloc,                                                  &
+         perQnt     = perQnt,                                                &
+         RC         = RC                                                    )
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
@@ -4277,37 +6944,73 @@ CONTAINS
        RETURN
     ENDIF
 
-    !---------------------
-    ! Check dimensions
-    !---------------------
-    IF ( rank /= 3 ) THEN
-       ErrMsg = 'Data and metadata rank do not match for ' // TRIM(metadataID)
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
-       RETURN
-    ENDIF
+    !========================================================================
+    ! If there is an Olson landtype dimension,
+    ! then register each land type as a 2-D field
+    !========================================================================
+    IF ( TRIM( perQnt ) == 'OLSON' ) THEN
 
-    ! Is the data placed on vertical edges?
-    onEdges = ( vLoc == vLocationEdge )
+       ! Check dimensions
+       IF ( rank /= 2 ) THEN
+          ErrMsg = &
+             'Data and metadata rank do not match for ' // TRIM(metadataID)
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
 
-    !---------------------
-    ! Add to registry
-    !---------------------
-    CALL Registry_AddField( am_I_Root    = am_I_Root,                        &
-                            Registry     = State_Met%Registry,               &
-                            State        = State_Met%State,                  &
-                            Variable     = TRIM( metadataID ),               &
-                            units        = TRIM( units      ),               &
-                            Description  = TRIM( desc       ),               &
-                            OnLevelEdges = onEdges,                          &
-                            Data3d_I     = Ptr2Data,                         &
-                            RC           = RC                               )
+       ! Loop over # of Olson types
+       DO N = 1, NSURFTYPE
 
-    ! Trap potential errors
-    IF ( RC /= GC_SUCCESS ) THEN
-       ErrMsg = TRIM( ErrMsg_reg ) // TRIM( MetadataID ) //                  &
-                '; Abnormal exit from routine "Registry_AddField"!'
-       CALL GC_Error( ErrMsg, RC, ThisLoc )
-       RETURN
+          ! Append the Olson land type index to the name & description
+          WRITE( numStr, '(I2.2)') N - 1
+          thisName = TRIM( metaDataId )        // numStr
+          thisDesc = TRIM( desc       ) // " " // numStr
+
+          ! Register each 2-D array per Olson landtype individually
+          CALL Registry_AddField(                                            &
+               Input_Opt    = Input_Opt,                                     &
+               Registry     = State_Met%Registry,                            &
+               State        = State_Met%State,                               &
+               Variable     = TRIM( thisName   ),                            &
+               Description  = TRIM( thisDesc   ),                            &
+               Units        = TRIM( Units      ),                            &
+               Data2d_I     = Ptr2Data(:,:,N),                               &
+               RC           = RC                                            )
+
+       ENDDO
+
+    !========================================================================
+    ! Otherwise, register as a single 3-D field
+    !========================================================================
+    ELSE
+
+       ! Check dimensions
+       IF ( rank /= 3 ) THEN
+          ErrMsg = &
+             'Data and metadata rank do not match for ' // TRIM(metadataID)
+          CALL GC_Error( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
+
+       ! Register the entire 3-D field
+       CALL Registry_AddField(                                               &
+            Input_Opt    = Input_Opt,                                        &
+            Registry     = State_Met%Registry,                               &
+            State        = State_Met%State,                                  &
+            Variable     = TRIM( MetadataID ),                               &
+            Description  = TRIM( Desc       ),                               &
+            Units        = TRIM( Units      ),                               &
+            OnLevelEdges = onEdges,                                          &
+            Data3d_I     = Ptr2Data,                                         &
+            RC           = RC                                               )
+
+       ! Trap potential errors
+       IF ( RC /= GC_SUCCESS ) THEN
+          errMsg = TRIM( errMsg_reg ) // TRIM( metadataID ) //               &
+             '; Abnormal exit from routine "Registry_AddField"!'
+          CALL GC_Error( errMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
     ENDIF
 
   END SUBROUTINE Register_MetField_Int_3D

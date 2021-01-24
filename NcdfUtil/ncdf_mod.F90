@@ -1,6 +1,5 @@
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GFSC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -34,6 +33,7 @@ MODULE NCDF_MOD
 ! !PUBLIC MEMBER FUNCTIONS:
 !
   PUBLIC  :: NC_OPEN
+  PUBLIC  :: NC_APPEND
   PUBLIC  :: NC_CREATE
   PUBLIC  :: NC_SET_DEFMODE
   PUBLIC  :: NC_VAR_DEF
@@ -49,12 +49,13 @@ MODULE NCDF_MOD
   PUBLIC  :: NC_GET_SIGMA_LEVELS
   PUBLIC  :: NC_WRITE
   PUBLIC  :: NC_ISMODELLEVEL
+  PUBLIC  :: NC_ISSIGMALEVEL
+  PUBLIC  :: GET_TAU0
 !
 ! !PRIVATE MEMBER FUNCTIONS:
 !
   PRIVATE :: GET_TIDX
   PRIVATE :: TIMEUNIT_CHECK
-  PRIVATE :: GET_TAU0
   PRIVATE :: NC_WRITE_3D
   PRIVATE :: NC_WRITE_4D
   PRIVATE :: NC_VAR_WRITE_INT_1D
@@ -81,22 +82,12 @@ MODULE NCDF_MOD
   PRIVATE :: NC_GET_SIG_FROM_HYBRID
   PRIVATE :: NC_READ_VAR_CORE
 !
+! !REMARKS:
+!  This file is based on code from NASA/GSFC, SIVO, Code 610.3
+!
 ! !REVISION HISTORY:
 !  27 Jul 2012 - C. Keller   - Initial version
-!  13 Jun 2014 - R. Yantosca - Now use F90 free-format indentation
-!  13 Jun 2014 - R. Yantosca - Cosmetic changes in ProTeX headers
-!  10 Jul 2014 - R. Yantosca - Add GET_TAU0 as a PRIVATE local routine
-!  12 Dec 2014 - C. Keller   - Added NC_ISMODELLEVEL
-!  19 Sep 2016 - R. Yantosca - Rewrite NC_VAR_WRITE overloaded functions to
-!                              remove optional args (which chokes Gfortran)
-!  19 Sep 2016 - R. Yantosca - Now include netcdf.inc once at top of module
-!  19 Sep 2016 - R. Yantosca - Remove extra IMPLICIT NONE statements, we only
-!                              need to declare it once at the top of module
-!  10 Apr 2017 - R. Yantosca - Renamed routine NC_READ_TIME_YYYYMMDDhh to
-!                              NC_READ_TIME_YYYYMMDDhhmm, to indicate that
-!                              it will now uses YYYYYMMDDhhmm format
-!  09 Aug 2017 - R. Yantosca - Add public routine NC_SET_DEFMODE
-!  25 Aug 2017 - R. Yantosca - Add NC_Var_Write_*_0D routines
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -144,8 +135,7 @@ MODULE NCDF_MOD
 CONTAINS
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -160,31 +150,83 @@ CONTAINS
 !
 ! !INPUT PARAMETERS:
 !
-    CHARACTER(LEN=*), INTENT(IN   )  :: FileName
+    CHARACTER(LEN=*), INTENT(IN)  :: FileName
 !
 ! !OUTPUT PARAMETERS:
 !
-    INTEGER,          INTENT(  OUT)  :: fID
+    INTEGER,          INTENT(OUT) :: fID
 !
 ! !REVISION HISTORY:
 !  04 Nov 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
-
     !=================================================================
     ! NC_OPEN begins here
     !=================================================================
 
     ! Open netCDF file
-    CALL Ncop_Rd( fId, TRIM(FileName) )
-
+    CALL Ncop_Rd( fId, TRIM( FileName ) )
 
   END SUBROUTINE NC_OPEN
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Nc_Append
+!
+! !DESCRIPTION: Simple wrapper routine to open the given netCDF file.
+!  for appending extra values along a record dimension.
+!\\
+!\\
+! !INTERFACE:
+!
+  SUBROUTINE NC_APPEND( FileName, fID, nTime )
+!
+! !INPUT PARAMETERS:
+!
+    CHARACTER(LEN=*), INTENT(IN)  :: FileName
+!
+! !OUTPUT PARAMETERS:
+!
+    INTEGER,          INTENT(OUT) :: fID
+    INTEGER,          OPTIONAL    :: nTime
+!
+! !REVISION HISTORY:
+!  04 Nov 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    INTEGER :: RC, vId
+
+    !=================================================================
+    ! NC_APPEND begins here
+    !=================================================================
+
+    ! Open netCDF file
+    CALL Ncop_Wr( fId, TRIM(FileName) )
+
+    ! Also return the number of time slices so that we can
+    ! append to an existing file w/o clobbering any data
+    IF ( PRESENT( nTime ) ) THEN
+       nTime = -1
+       RC = Nf_Inq_DimId( fId, 'time', vId )
+       IF ( RC == NF_NOERR ) THEN
+          RC = Nf_Inq_DimLen( fId, vId, nTime )
+       ENDIF
+    ENDIF
+
+  END SUBROUTINE NC_APPEND
+!EOC
+!------------------------------------------------------------------------------
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -203,6 +245,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  04 Nov 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -241,6 +284,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  06 Jan 2015 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -271,8 +315,7 @@ CONTAINS
   END SUBROUTINE Nc_Set_DefMode
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -304,6 +347,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  04 Nov 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -372,8 +416,7 @@ CONTAINS
   END SUBROUTINE NC_READ_TIME
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -404,6 +447,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  04 Nov 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -413,8 +457,7 @@ CONTAINS
   END SUBROUTINE NC_READ_VAR_SP
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -445,6 +488,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  04 Nov 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -454,8 +498,7 @@ CONTAINS
   END SUBROUTINE NC_READ_VAR_DP
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -487,7 +530,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  04 Nov 2012 - C. Keller   - Initial version
-!  20 Feb 2015 - R. Yantosca - Need to add attType to Ncdoes_Attr_Exist
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -566,8 +609,7 @@ CONTAINS
   END SUBROUTINE NC_READ_VAR_CORE
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -639,14 +681,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  27 Jul 2012 - C. Keller - Initial version
-!  18 Jan 2012 - C. Keller - Now reads 4D, 3D, and 2D arrays, with
-!                            optional dimensions level and time.
-!  18 Apr 2012 - C. Keller - Now also read & apply offset and scale factor
-!  27 Feb 2015 - C. Keller - Added weights.
-!  22 Sep 2015 - C. Keller - Added arbitrary dimension index.
-!  20 Nov 2015 - C. Keller - Bug fix: now read times if weights need be applied.
-!  23 Nov 2015 - C. Keller - Initialize all temporary arrays to 0.0 when allocating
-!  09 Jan 2017 - C. Keller - Bug fix: store time-weighted arrays in temporary array
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1199,8 +1234,7 @@ CONTAINS
   END SUBROUTINE NC_READ_ARR
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1236,11 +1270,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  27 Jul 2012 - C. Keller   - Initial version
-!  09 Oct 2014 - C. Keller   - Now also support 'minutes since ...'
-!  05 Nov 2014 - C. Keller   - Bug fix if reference datetime is in minutes.
-!  29 Apr 2016 - R. Yantosca - Don't initialize pointers in declaration stmts
-!  05 Apr 2017 - C. Keller   - Now also support 'seconds since ...'
-!  10 Apr 2017 - R. Yantosca - Now return times in YYYYMMDDhhmm
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1326,8 +1356,7 @@ CONTAINS
   END SUBROUTINE NC_READ_TIME_YYYYMMDDhhmm
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1370,8 +1399,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  18 Jan 2012 - C. Keller - Initial version
-!  09 Oct 2014 - C. Keller - Now also support 'minutes since ...'
-!  20 Nov 2015 - C. Keller - Now also support 'seconds since ...'
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1547,8 +1575,7 @@ CONTAINS
   END SUBROUTINE NC_GET_REFDATETIME
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1589,6 +1616,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  04 Nov 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1709,8 +1737,7 @@ CONTAINS
   END SUBROUTINE GET_TIDX
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1752,6 +1779,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  18 Jan 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1902,8 +1930,7 @@ CONTAINS
   END SUBROUTINE TIMEUNIT_CHECK
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1938,6 +1965,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  16 Jul 2014 - C. Keller   - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1952,8 +1980,7 @@ CONTAINS
   END SUBROUTINE NC_GET_GRID_EDGES_SP
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -1988,6 +2015,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  16 Jul 2014 - C. Keller   - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2002,8 +2030,7 @@ CONTAINS
   END SUBROUTINE NC_GET_GRID_EDGES_DP
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2037,6 +2064,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  16 Jul 2014 - C. Keller   - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2204,8 +2232,7 @@ CONTAINS
   END SUBROUTINE NC_GET_GRID_EDGES_C
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2240,6 +2267,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  03 Oct 2014 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2251,8 +2279,7 @@ CONTAINS
   END SUBROUTINE NC_GET_SIGMA_LEVELS_SP
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2287,6 +2314,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  03 Oct 2014 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2298,8 +2326,7 @@ CONTAINS
   END SUBROUTINE NC_GET_SIGMA_LEVELS_DP
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2345,66 +2372,99 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  03 Oct 2014 - C. Keller   - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 !
 ! !LOCAL VARIABLES:
 !
-    CHARACTER(LEN=255)   :: stdname
-    CHARACTER(LEN=255)   :: a_name    ! netCDF attribute name
-    INTEGER              :: a_type    ! netCDF attribute type
-    LOGICAL              :: ok
+    ! Scalars
+    LOGICAL            :: found
+    INTEGER            :: a_type    ! netCDF attribute type
 
-    !======================================================================
+    ! Straings
+    CHARACTER(LEN=255) :: stdname
+    CHARACTER(LEN=255) :: a_name    ! netCDF attribute name
+    CHARACTER(LEN=255) :: a_val     ! netCDF attribute value
+
+    !========================================================================
     ! NC_GET_SIGMA_LEVELS begins here
-    !======================================================================
+    !========================================================================
+
+    ! Initialize
+    RC = 0
 
     !------------------------------------------------------------------------
-    ! Get level standard name. This attribute will be used to identify
-    ! the coordinate system
+    ! Test that the level index variable exists
     !------------------------------------------------------------------------
-    ok = Ncdoes_Var_Exist( fID, TRIM(levName) )
-    IF ( .NOT. ok ) THEN
-       WRITE(*,*) 'Cannot find level variable ', TRIM(levName), ' in ', TRIM(ncFile), '!'
+    found = Ncdoes_Var_Exist( fID, TRIM(levName) )
+    IF ( .not. found ) THEN
+       WRITE(*,*) 'Cannot find level variable ',                             &
+                  TRIM(levName), ' in ', TRIM(ncFile), '!'
        RC = -999
        RETURN
     ENDIF
 
-    ! Get standard name
+    !------------------------------------------------------------------------
+    ! Look for the "standard_name" or "long_name" attribute,
+    ! which will be used to identify the vertical coordinate
+    !------------------------------------------------------------------------
+
+    ! First look for "standard_name"
     a_name = "standard_name"
-    IF ( .NOT. NcDoes_Attr_Exist ( fID,          TRIM(levName),     &
-                                   TRIM(a_Name), a_type         ) ) THEN
-       WRITE(*,*) 'Cannot find level attribute ', TRIM(a_name), ' in variable ', &
-                  TRIM(levName), ' - File: ', TRIM(ncFile), '!'
-       RC = -999
-       RETURN
+    found  = NcDoes_Attr_Exist( fId, TRIM(levName), TRIM(a_name), a_type )
+
+    ! If not found, then look for "long_name"
+    IF ( .not. found ) THEN
+       a_name = "long_name"
+       found  = NcDoes_Attr_Exist( fId, TRIM(levName), TRIM(a_name), a_type )
+
+       ! If neither attribute is found, then exit with error
+       IF ( .not. found ) THEN
+          WRITE(*,*) 'Cannot find level attribute ', TRIM(a_name),           &
+               ' in variable ', TRIM(levName), ' - File: ', TRIM(ncFile), '!'
+          RC = -999
+          RETURN
+       ENDIF
     ENDIF
-    CALL NcGet_Var_Attributes( fID, TRIM(levName), TRIM(a_name), stdname )
+
+    ! Read the "standard_name" or "long_name" attribute (whichever is found)
+    CALL NcGet_Var_Attributes( fID, TRIM(levName), TRIM(a_name), a_val )
 
     !------------------------------------------------------------------------
     ! Call functions to calculate sigma levels depending on the coordinate
     ! system.
     !------------------------------------------------------------------------
+    IF ( TRIM(a_val) == 'atmosphere_hybrid_sigma_pressure_coordinate' ) THEN
 
-    IF ( TRIM(stdname) == 'atmosphere_hybrid_sigma_pressure_coordinate' ) THEN
+       IF ( PRESENT( SigLev4 ) ) THEN
 
-       IF ( PRESENT(SigLev4) ) THEN
-          CALL NC_GET_SIG_FROM_HYBRID ( fID,  levName, lon1, lon2, lat1, lat2, &
-                                        lev1, lev2,    time, dir, RC, SigLev4=SigLev4 )
-       ELSEIF ( PRESENT(SigLev8) ) THEN
-          CALL NC_GET_SIG_FROM_HYBRID ( fID,  levName, lon1, lon2, lat1, lat2, &
-                                        lev1, lev2,    time, dir, RC, SigLev8=SigLev8 )
+          ! Return 4-byte real array
+          CALL NC_GET_SIG_FROM_HYBRID( fID,  levName, lon1, lon2,            &
+                                       lat1, lat2,    lev1, lev2,            &
+                                       time, dir,     RC,   SigLev4=SigLev4 )
+       ELSE IF ( PRESENT( SigLev8 ) ) THEN
+
+          ! Return 8-byte real array
+          CALL NC_GET_SIG_FROM_HYBRID( fID,  levName, lon1, lon2,            &
+                                       lat1, lat2,    lev1, lev2,            &
+                                       time,  dir,    RC,   SigLev8=SigLev8 )
        ELSE
+
+          ! Othrwise exit with error
           WRITE(*,*) 'SigLev array is missing!'
           RC = -999
           RETURN
        ENDIF
        IF ( RC /= 0 ) RETURN
 
-    ! NOTE: for now, only hybrid sigma coordinates are supported!
     ELSE
-       WRITE(*,*) 'Invalid level standard name: ', TRIM(stdname), ' in ', TRIM(ncFile)
+
+       ! NOTE: for now, only hybrid sigma coordinates are supported!
+       ! So exit with error if we get this far
+       WRITE(*,*) 'Invalid level standard name: ', TRIM(stdname),            &
+            ' in ', TRIM(ncFile)
        RC = -999
        RETURN
     ENDIF
@@ -2415,8 +2475,7 @@ CONTAINS
   END SUBROUTINE NC_GET_SIGMA_LEVELS_C
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2469,8 +2528,9 @@ CONTAINS
 !
 ! !INTERFACE:
 !
-  SUBROUTINE NC_GET_SIG_FROM_HYBRID ( fID,  levName, lon1, lon2, lat1, lat2, &
-                                      lev1, lev2,    time, dir,  RC,   sigLev4, sigLev8 )
+  SUBROUTINE NC_GET_SIG_FROM_HYBRID ( fID,  levName, lon1,   lon2, lat1,     &
+                                      lat2, lev1,    lev2,   time, dir,      &
+                                      RC,   sigLev4, sigLev8                )
 !
 ! !INPUT PARAMETERS:
 !
@@ -2493,7 +2553,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  03 Oct 2014 - C. Keller   - Initial version
-!  29 Apr 2016 - R. Yantosca - Don't initialize pointers in declaration stmts
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2707,8 +2767,7 @@ CONTAINS
   END SUBROUTINE NC_GET_SIG_FROM_HYBRID
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2734,6 +2793,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  03 Oct 2014 - C. Keller   - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2775,8 +2835,7 @@ CONTAINS
   END SUBROUTINE GetVarFromFormula
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2814,6 +2873,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2846,8 +2906,7 @@ CONTAINS
   END SUBROUTINE NC_WRITE_3D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2887,6 +2946,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2918,8 +2978,7 @@ CONTAINS
   END SUBROUTINE NC_WRITE_4D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -2961,9 +3020,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  10 May 2017 - R. Yantosca - Don't manually increment vId, it's returned
-!                              as an output from NCDEF_VARIABLE
-!  18 May 2018 - C. Holmes   - Define time as an unlimited dimension
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3171,8 +3228,7 @@ CONTAINS
   END SUBROUTINE NC_DEFINE
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -3206,7 +3262,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  13 Jun 2014 - R. Yantosca - Avoid array temporaries
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3257,8 +3313,7 @@ CONTAINS
   END SUBROUTINE NC_WRITE_DIMS
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -3290,6 +3345,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3310,8 +3366,7 @@ CONTAINS
   END SUBROUTINE NC_WRITE_DATA_3D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -3343,6 +3398,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3364,8 +3420,7 @@ CONTAINS
   END SUBROUTINE NC_WRITE_DATA_4D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -3430,18 +3485,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  11 Jan 2016 - R. Yantosca - Added optional CREATE_NC4 to save as netCDF-4
-!  14 Jan 2016 - E. Lundgren - Pass title string for netcdf metadata
-!  08 Aug 2017 - R. Yantosca - Add more optional arguments (mostly global atts)
-!  08 Aug 2017 - R. Yantosca - Now define in dims in order: time,lev,lat,lon
-!  08 Aug 2017 - R. Yantosca - Add optional KeepDefMode argument so that we can
-!                              stay in netCDF define mode upon leaving this
-!                              routine (i.e. to define variables afterwards)
-!  24 Aug 2017 - R. Yantosca - Added nIlev and iLevId variables so that we can
-!                               create the iLev dimension (level interfaces)
-!  24 Jan 2018 - R. Yantosca - Add update frequency as an optional global attr
-!  31 Jan 2018 - R. Yantosca - Add StartTimeStamp, EndTimeStamp arguments
-!  18 May 2018 - C. Holmes   - Define time as an unlimited dimension
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3620,8 +3664,7 @@ CONTAINS
   END SUBROUTINE Nc_Create
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -3679,13 +3722,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  21 Jan 2017 - C. Holmes   - Added optional DefMode argument to avoid
-!                              excessive switching between define & data modes
-!  18 Feb 2017 - C. Holmes   - Enable netCDF-4 compression
-!  08 Aug 2017 - R. Yantosca - Add more optional arguments for variable atts
-!  24 Aug 2017 - R. Yantosca - Added StandardName, FormulaTerms arguments
-!  24 Aug 2017 - R. Yantosca - Added optional Ilev dimension so that we can
-!                               define variables on level interfaces
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3903,8 +3940,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  28 Aug 2017 - R. Yantosca - Initial version
-!  11 Sep 2017 - R. Yantosca - Do not call NF_DEF_VAR_CHUNKING if the netCDF
-!                               library was built w/o compression enabled
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3927,8 +3963,7 @@ CONTAINS
   END SUBROUTINE Nc_Var_Chunk
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -3957,6 +3992,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  25 Aug 2017 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3973,8 +4009,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R8_0d
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4003,8 +4038,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_R8_1D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4028,8 +4062,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R8_1D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4058,8 +4091,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_R8_2D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4089,8 +4121,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R8_2D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4119,8 +4150,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_R8_3D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4150,8 +4180,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R8_3D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4180,8 +4209,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_R8_4D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4211,8 +4239,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R8_4D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4241,6 +4268,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  25 Aug 2017 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4257,8 +4285,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R4_0D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4287,8 +4314,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_R4_1D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4312,8 +4338,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R4_1D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4342,8 +4367,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_R4_2D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4373,8 +4397,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R4_2D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4403,8 +4426,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_R4_3D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4434,8 +4456,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R4_3D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4464,8 +4485,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_R4_1D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4494,8 +4514,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_R4_4D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4524,6 +4543,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  25 Aug 2017 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4540,8 +4560,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_INT_0D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4570,8 +4589,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_INT_1D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4595,8 +4613,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_INT_1D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4625,8 +4642,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_INT_2D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4656,8 +4672,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_INT_2D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4686,8 +4701,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_INT_3D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4717,8 +4731,7 @@ CONTAINS
   END SUBROUTINE NC_VAR_WRITE_INT_3D
 !EOC
 !------------------------------------------------------------------------------
-!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
-!                      and NASA/GSFC, SIVO, Code 610.3                        !
+!                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
 !BOP
 !
@@ -4747,8 +4760,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  15 Jun 2012 - C. Keller   - Initial version
-!  16 Jun 2014 - R. Yantosca - Now use simple arrays instead of allocating
-!  19 Sep 2016 - R. Yantosca - Renamed to NC_VAR_WRITE_INT_1D
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4782,7 +4794,7 @@ CONTAINS
 !------------------------------------------------------------------------------
 !BOP
 !
-! !IROUTINE: Get_Tau0_6a
+! !IROUTINE: Get_Tau0
 !
 ! !DESCRIPTION: Function GET\_TAU0\_6A returns the corresponding TAU0 value
 !  for the first day of a given MONTH of a given YEAR.  This is necessary to
@@ -4823,17 +4835,7 @@ CONTAINS
 !  TAU0 is hours elapsed since 00:00 GMT on 01 Jan 1985.
 !
 ! !REVISION HISTORY:
-!  (1 ) 1985 is the first year of the GEOS epoch.
-!  (2 ) Add TAU0 values for years 1985-2001 (bmy, 8/1/00)
-!  (3 ) Correct error for 1991 TAU values.  Also added 2002 and 2003.
-!        (bnd, bmy, 1/4/01)
-!  (4 ) Updated comments  (bmy, 9/26/01)
-!  (5 ) Now references JULDAY from "julday_mod.f" (bmy, 11/20/01)
-!  (6 ) Now references ERROR_STOP from "error_mod.f"  (bmy, 10/15/02)
-!  20 Nov 2009 - R. Yantosca - Added ProTeX header
-!  10 Jul 2014 - R. Yantosca - Add this routine as a PRIVATE module variable
-!                              to prevent ncdf_mod.F90 from using bpch2_mod.F
-!  10 Jul 2014 - R. Yantosca - Now use F90 free-format indentation
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4850,14 +4852,14 @@ CONTAINS
     ! Error checking
     IF ( MONTH < 1 .or. MONTH > 12 ) THEN
        WRITE( 6, 100 )
-100    FORMAT( 'Invalid MONTH selection!  STOP in GET_TAU (ncdf_mod.F90)!' )
+100    FORMAT( 'Invalid MONTH selection!  STOP in GET_TAU0 (ncdf_mod.F90)!' )
        STOP
     ENDIF
 
     ! Error checking
     IF ( DAY < 1 .or. DAY > 31 ) THEN
        WRITE( 6, 110 )
-110    FORMAT( 'Invalid DAY selection!  STOP in GET_TAU (ncdf_mod.F90)!' )
+110    FORMAT( 'Invalid DAY selection!  STOP in GET_TAU0 (ncdf_mod.F90)!' )
        STOP
     ENDIF
 
@@ -4892,20 +4894,21 @@ CONTAINS
 
   END FUNCTION GET_TAU0
 !------------------------------------------------------------------------------
-!                  GEOS-Chem Global Chemical Transport Model                  !
+!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
+!                      and NASA/GFSC, SIVO, Code 610.3                        !
 !------------------------------------------------------------------------------
 !BOP
 !
-! !IROUTINE: Nc_IsModelLevels
+! !IROUTINE: Nc_IsModelLevel
 !
-! !DESCRIPTION: Function NC\_ISMODELLEVELS returns true if (and only if) the
+! !DESCRIPTION: Function NC\_IsModelLevel returns true if (and only if) the
 !  long name of the level variable name of the given file ID contains the
 !  character "GEOS-Chem level".
 !\\
 !\\
 ! !INTERFACE:
 !
-  FUNCTION NC_ISMODELLEVEL( fID, lev_name ) RESULT ( IsModelLevel )
+  FUNCTION NC_IsModelLevel( fID, lev_name ) RESULT ( IsModelLevel )
 !
 ! !USES:
 !
@@ -4922,6 +4925,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  12 Dec 2014 - C. Keller   - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4933,7 +4937,7 @@ CONTAINS
     INTEGER                :: a_type
 
     !=======================================================================
-    ! NC_ISMODELLEVEL begins here!
+    ! NC_IsModelLevel begins here!
     !=======================================================================
 
     ! Init
@@ -4949,11 +4953,95 @@ CONTAINS
        CALL NcGet_Var_Attributes( fID, TRIM(lev_name), TRIM(a_name), LngName )
 
        ! See if this is a GEOS-Chem model level
-       IF ( INDEX(TRIM(LngName),"GEOS-Chem level") > 0 ) THEN
+       IF ( INDEX( TRIM(LngName), "GEOS-Chem level" ) > 0 ) THEN
           IsModelLevel = .TRUE.
        ENDIF
     ENDIF
 
-  END FUNCTION NC_ISMODELLEVEL
+  END FUNCTION NC_IsModelLevel
+!EOC
+!------------------------------------------------------------------------------
+!       NcdfUtilities: by Harvard Atmospheric Chemistry Modeling Group        !
+!                      and NASA/GFSC, SIVO, Code 610.3                        !
+!------------------------------------------------------------------------------
+!BOP
+!
+! !IROUTINE: Nc_IsSigmaLevel
+!
+! !DESCRIPTION: Function NC\_IsSigmaLevels returns true if (and only if) the
+!  long name of the level variable name of the given file ID contains the
+!  character "atmospheric_hybrid_sigma_pressure_coordinate".
+!\\
+!\\
+! !INTERFACE:
+!
+  FUNCTION NC_IsSigmaLevel( fID, lev_name ) RESULT ( IsSigmaLevel )
+!
+! !USES:
+!
+#   include "netcdf.inc"
+!
+! !INPUT PARAMETERS:
+!
+    INTEGER,          INTENT(IN) :: fID        ! file ID
+    CHARACTER(LEN=*), INTENT(IN) :: lev_name   ! level variable name
+!
+! !RETURN VALUE:
+!
+    LOGICAL                      :: IsSigmaLevel
+!
+! !REVISION HISTORY:
+!  12 Dec 2014 - C. Keller   - Initial version
+!  See https://github.com/geoschem/ncdfutil for complete history
+!EOP
+!------------------------------------------------------------------------------
+!BOC
+!
+! !LOCAL VARIABLES:
+!
+    ! Scalars
+    LOGICAL                :: found
+    INTEGER                :: a_type
+
+    ! Strings
+    CHARACTER(LEN=255)     :: a_name
+    CHARACTER(LEN=255)     :: a_val
+
+    !=======================================================================
+    ! NC_IsSigmaLevel begins here!
+    !=======================================================================
+
+    ! Initialize
+    IsSigmaLevel = .FALSE.
+
+    ! Check if there is a long_name attribute
+    a_name = "standard_name"
+    found  = Ncdoes_Attr_Exist( fId, TRIM(lev_name), TRIM(a_name), a_type )
+
+    ! First check if the "standard_name" attribute exists
+    IF ( found ) THEN
+
+       ! Read "standard_name" attribute
+       CALL NcGet_Var_Attributes( fID, TRIM(lev_name), TRIM(a_name), a_val )
+
+    ELSE
+
+       ! If the "standard_name" attribute isn't found, try "long_name"
+       a_name = "long_name"
+       found = Ncdoes_Attr_Exist( fId, TRIM(lev_name), TRIM(a_name), a_type )
+
+       ! Read "long_name" attribute
+       IF ( found ) THEN
+          CALL NcGet_Var_Attributes( fID, TRIM(lev_name), TRIM(a_name), a_val )
+       ENDIF
+    ENDIF
+
+    ! Test if the attribute value indicates a hybrid sigma-pressure grid
+    IF ( INDEX( TRIM( a_val ),                                               &
+         "atmospheric_hybrid_sigma_pressure_coordinate" ) > 0 ) THEN
+       IsSigmaLevel = .TRUE.
+    ENDIF
+
+  END FUNCTION NC_IsSigmaLevel
 !EOC
 END MODULE NCDF_MOD

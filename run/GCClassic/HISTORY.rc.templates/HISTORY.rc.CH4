@@ -1,13 +1,13 @@
 ###############################################################################
 ###  HISTORY.rc file for GEOS-Chem CH4 specialty simulations                ###
-###  Contact: GEOS-Chem Support Team (geos-chem-support@as.harvard.edu)     ###
+###  Contact: GEOS-Chem Support Team (geos-chem-support@g.harvard.edu)      ###
 ###############################################################################
 
 #============================================================================
 # EXPID allows you to specify the beginning of the file path corresponding
 # to each diagnostic collection.  For example:
 #
-#   EXPID: ./GEOSChem 
+#   EXPID: ./GEOSChem
 #      Will create netCDF files whose names begin "GEOSChem",
 #      in this run directory.
 #
@@ -28,14 +28,14 @@ EXPID:  ./OutputDir/GEOSChem
 # your own customized diagnostic collections as well.
 #==============================================================================
 COLLECTIONS: 'Restart',
-	     'CH4',
+             'CH4',
+             'Metrics',
              'SpeciesConc',
              #'Budget',
              #'CloudConvFlux',
              #'ConcAfterChem',
-             #'LevelEdgeDiags',      
-             #'StateMet',      
-             #'Transport',
+             #'LevelEdgeDiags',
+             #'StateMet',
              #'BoundaryConditions',
 ::
 ###############################################################################
@@ -92,24 +92,24 @@ COLLECTIONS: 'Restart',
   Budget.frequency:    {FREQUENCY}
   Budget.duration:     {DURATION}
   Budget.mode:         'time-averaged'
-  Budget.fields:       'BudgetEmisDryDepFull_?ADV?           ', 'GIGCchem',  
-                       'BudgetEmisDryDepTrop_?ADV?           ', 'GIGCchem',  
-                       'BudgetEmisDryDepPBL_?ADV?            ', 'GIGCchem',  
+  Budget.fields:       'BudgetEmisDryDepFull_?ADV?           ', 'GIGCchem',
+                       'BudgetEmisDryDepTrop_?ADV?           ', 'GIGCchem',
+                       'BudgetEmisDryDepPBL_?ADV?            ', 'GIGCchem',
                        'BudgetChemistryFull_?ADV?            ', 'GIGCchem',
                        'BudgetChemistryTrop_?ADV?            ', 'GIGCchem',
-                       'BudgetChemistryPBL_?ADV?             ', 'GIGCchem',  
+                       'BudgetChemistryPBL_?ADV?             ', 'GIGCchem',
                        'BudgetTransportFull_?ADV?            ', 'GIGCchem',
                        'BudgetTransportTrop_?ADV?            ', 'GIGCchem',
-                       'BudgetTransportPBL_?ADV?             ', 'GIGCchem',  
+                       'BudgetTransportPBL_?ADV?             ', 'GIGCchem',
                        'BudgetMixingFull_?ADV?               ', 'GIGCchem',
                        'BudgetMixingTrop_?ADV?               ', 'GIGCchem',
-                       'BudgetMixingPBL_?ADV?                ', 'GIGCchem',    
+                       'BudgetMixingPBL_?ADV?                ', 'GIGCchem',
                        'BudgetConvectionFull_?ADV?           ', 'GIGCchem',
                        'BudgetConvectionTrop_?ADV?           ', 'GIGCchem',
-                       'BudgetConvectionPBL_?ADV?            ', 'GIGCchem',  
+                       'BudgetConvectionPBL_?ADV?            ', 'GIGCchem',
                        'BudgetWetDepFull_?WET?               ', 'GIGCchem',
                        'BudgetWetDepTrop_?WET?               ', 'GIGCchem',
-                       'BudgetWetDepPBL_?WET?                ', 'GIGCchem',  
+                       'BudgetWetDepPBL_?WET?                ', 'GIGCchem',
 ::
 #==============================================================================
 # %%%%% THE CH4 COLLECTION %%%%%
@@ -155,7 +155,7 @@ COLLECTIONS: 'Restart',
   ConcAfterChem.frequency:    {FREQUENCY}
   ConcAfterChem.duration:     {DURATION}
   ConcAfterChem.mode:         'time-averaged'
-  ConcAfterChem.fields:       'OHconcAfterChem               ', 'GIGCchem',  
+  ConcAfterChem.fields:       'OHconcAfterChem               ', 'GIGCchem',
 ::
 #==============================================================================
 # %%%%% THE LevelEdgeDiags COLLECTION %%%%%
@@ -268,20 +268,6 @@ COLLECTIONS: 'Restart',
                               'Met_V                         ', 'GIGCchem',
                               'Met_V10M                      ', 'GIGCchem',
                               'Met_Z0                        ', 'GIGCchem',
-::
-#==============================================================================
-# %%%%% THE Transport COLLECTION %%%%%
-#
-# Diagnostics for evaluating transport, including age of air [s]
-#
-# Available for all simulations
-#==============================================================================
-  Transport.template:         '%y4%m2%d2_%h2%n2z.nc4',
-  Transport.format:           'CFIO',
-  Transport.frequency:        'End',
-  Transport.duration:         'End',
-  Transport.mode:             'instantaneous'
-  Transport.fields:           'Met_AgeOfAir                  ', 'GIGCchem',
 ::
 #==============================================================================
 # %%%%% THE BoundaryConditions COLLECTION %%%%%

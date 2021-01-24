@@ -37,6 +37,9 @@ MODULE State_Grid_Mod
      !----------------------------------------
      ! User-defined grid fields
      !----------------------------------------
+#if defined( MODEL_WRF )
+     INTEGER            :: ID          ! Grid identifier number
+#endif
      CHARACTER(LEN=255) :: GridRes     ! Grid resolution
      REAL(fp)           :: DX          ! Delta X         [degrees longitude]
      REAL(fp)           :: DY          ! Delta Y         [degrees latitude]
@@ -86,6 +89,7 @@ MODULE State_Grid_Mod
 !
 ! !REVISION HISTORY:
 !  11 Nov 2018 - M. Sulprizio- Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -105,14 +109,15 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Init_State_Grid( am_I_Root, State_Grid, RC )
+  SUBROUTINE Init_State_Grid( Input_Opt, State_Grid, RC )
 !
 ! !USES:
 !
+    USE Input_Opt_Mod, ONLY : OptInput
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,        INTENT(IN)    :: am_I_Root   ! Is this the root CPU?
+    TYPE(OptInput), INTENT(IN)    :: Input_Opt    ! Input Options object
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -120,12 +125,13 @@ CONTAINS
 !
 ! !OUTPUT PARAMETERS:
 !
-    INTEGER,        INTENT(OUT)   :: RC          ! Return code
+    INTEGER,        INTENT(OUT)   :: RC           ! Return code
 !
 ! !REMARKS:
 !
 ! !REVISION HISTORY:
 !  11 Nov 2018 - M. Sulprizio- Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -136,6 +142,9 @@ CONTAINS
     !----------------------------------------
     ! User-defined grid fields
     !----------------------------------------
+#if defined( MODEL_WRF )
+    State_Grid%ID           = -1
+#endif
     State_Grid%GridRes      = ''
     State_Grid%DX           = 0e+0_fp
     State_Grid%DY           = 0e+0_fp
@@ -196,7 +205,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Allocate_State_Grid( am_I_Root, Input_Opt, State_Grid, RC )
+  SUBROUTINE Allocate_State_Grid( Input_Opt, State_Grid, RC )
 !
 ! !USES:
 !
@@ -205,7 +214,6 @@ CONTAINS
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,        INTENT(IN)    :: am_I_Root   ! Are we on the root CPU
     TYPE(OptInput), INTENT(IN)    :: Input_Opt   ! Input Options object
 !
 ! !INPUT/OUTPUT PARAMETERS:
@@ -219,6 +227,7 @@ CONTAINS
 ! !REVISION HISTORY:
 !  10 Mar 2019 - M. Sulprizio- Initial version, based on Init_Grid formerly in
 !                              gc_grid_mod.F90
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -294,14 +303,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Cleanup_State_Grid( am_I_Root, State_Grid, RC )
-!
-! !USES:
-!
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,        INTENT(IN)    :: am_I_Root   ! Is this the root CPU?
+  SUBROUTINE Cleanup_State_Grid( State_Grid, RC )
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -309,10 +311,11 @@ CONTAINS
 !
 ! !OUTPUT PARAMETERS:
 !
-    INTEGER,        INTENT(OUT)   :: RC          ! Return code
+    INTEGER,        INTENT(OUT)   :: RC           ! Return code
 !
 ! !REVISION HISTORY:
 !  11 Nov 2018 - M. Sulprizio- Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC

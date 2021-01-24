@@ -7,7 +7,7 @@
 !
 ! !DESCRIPTION: Contains routines to create a netCDF file for each GEOS-Chem
 !  diagnostic collection (as specified by each HISTORY CONTAINER in the
-!  master collection list located within in history_mod.F90).
+!  main collection list located within in history_mod.F90).
 !\\
 !\\
 ! !INTERFACE:
@@ -42,10 +42,7 @@ MODULE History_Netcdf_Mod
 !
 ! !REVISION HISTORY:
 !  10 Aug 2017 - R. Yantosca - Initial version
-!  16 Aug 2017 - R. Yantosca - Reorder placement of routines
-!  16 Aug 2017 - R. Yantosca - Rename History_Expand_Date to Expand_Date_Time
-!  29 May 2019 - R. Yantosca - IndexVarList is now PRIVATE to the routine
-!                              History_Netcdf_Define
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -66,7 +63,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE History_Netcdf_Close( am_I_Root, Container, RC )
+  SUBROUTINE History_Netcdf_Close( Container, RC )
 !
 ! !USES:
 !
@@ -75,10 +72,6 @@ CONTAINS
     USE History_Util_Mod
     USE MetaHistContainer_Mod, ONLY : MetaHistContainer
     USE Ncdf_Mod
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,             INTENT(IN)  :: am_I_Root   ! Are we on the root CPU?
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -93,6 +86,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  14 Aug 2017 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -124,7 +118,7 @@ CONTAINS
        Container%IsFileDefined = .FALSE.
        Container%ReferenceYmd  = UNDEFINED_INT
        Container%ReferenceHms  = UNDEFINED_INT
-!       Container%ReferenceJd   = UNDEFINED_DBL
+      !Container%ReferenceJd   = UNDEFINED_DBL
        Container%ReferenceJsec = UNDEFINED_DBL
        Container%CurrTimeSlice = UNDEFINED_INT
 
@@ -173,22 +167,24 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE History_Netcdf_Define( am_I_Root, Container, RC )
+  SUBROUTINE History_Netcdf_Define( Input_Opt, Container, RC )
 !
 ! !USES:
 !
+    USE CharPak_Mod,            ONLY : To_UpperCase
     USE ErrCode_Mod
-    USE HistContainer_Mod,   ONLY : HistContainer, HistContainer_Print
-    USE HistItem_Mod,        ONLY : HistItem,      HistItem_Print
-    USE JulDay_Mod,          ONLY : CalDate
+    USE HistContainer_Mod,      ONLY : HistContainer, HistContainer_Print
+    USE HistItem_Mod,           ONLY : HistItem,      HistItem_Print
     USE History_Util_Mod
-    USE MetaHistItem_Mod,    ONLY : MetaHistItem
+    USE Input_Opt_Mod,          ONLY : OptInput
+    USE JulDay_Mod,             ONLY : CalDate
+    USE MetaHistItem_Mod,       ONLY : MetaHistItem
     USE Ncdf_Mod
-    USE Registry_Params_Mod, ONLY : KINDVAL_F4
+    USE Registry_Params_Mod,    ONLY : KINDVAL_F4
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,             INTENT(IN)  :: am_I_Root  ! Are we on the root CPU?
+    TYPE(OptInput),      INTENT(IN)  :: Input_Opt   ! Input options
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -199,20 +195,13 @@ CONTAINS
     INTEGER,             INTENT(OUT) :: RC         ! Success or failure
 !
 ! !REMARKS:
+!  For instantaneous file collections, if a file already exists (e.g. at 0h
+!  on the day when a run ended), then we will append into that file instead
+!  of opening a new file. This will prevent clobbering of existing data.
 !
 ! !REVISION HISTORY:
 !  03 Aug 2017 - R. Yantosca - Initial version
-!  14 Aug 2017 - R. Yantosca - Call History_Netcdf_Close from 1 level higher
-!  21 Aug 2017 - R. Yantosca - Now get yyyymmdd & hhmmms from the Container
-!  24 Aug 2017 - R. Yantosca - Now can save data on vertical interfaces
-!  28 Aug 2017 - R. Yantosca - Now make sure AREA is written as REAL(f4)
-!  28 Aug 2017 - R. Yantosca - Replace "TBD" in units w/ species units
-!  30 Aug 2017 - R. Yantosca - Now print file write info only on the root CPU
-!  11 Jul 2018 - R. Yantosca - Avoid roundoff errors when computing the
-!                              file reference date and time
-!  29 May 2019 - R. Yantosca - IndexVarList is now local to this routine,
-!                              we compute it for each collection so that we
-!                              can apply the collection subset window
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -220,21 +209,23 @@ CONTAINS
 ! !LOCAL VARIABLES:
 !
     ! Scalars
-    INTEGER                     :: N,          VarCt
-    INTEGER                     :: VarXDimId,  VarYDimId
-    INTEGER                     :: VarZDimId,  VarTDimId
-    INTEGER                     :: yyyymmdd,   hhmmss
-    INTEGER                     :: nLev,       nILev
-    INTEGER                     :: DataType
+    LOGICAL                     :: appendToFile, isRestart
+    INTEGER                     :: N,            VarCt
+    INTEGER                     :: VarXDimId,    VarYDimId
+    INTEGER                     :: VarZDimId,    VarTDimId
+    INTEGER                     :: yyyymmdd,     hhmmss
+    INTEGER                     :: nLev,         nILev
+    INTEGER                     :: DataType,     RC2
+    REAL(f8)                    :: offset
 
     ! Strings
     CHARACTER(LEN=5)            :: Z
     CHARACTER(LEN=8)            :: D
     CHARACTER(LEN=10)           :: T
     CHARACTER(LEN=255)          :: FileName
-    CHARACTER(LEN=255)          :: ErrMsg,     ThisLoc,     VarUnits
-    CHARACTER(LEN=255)          :: VarAxis,    VarPositive, VarCalendar
-    CHARACTER(LEN=255)          :: VarStdName, VarFormula
+    CHARACTER(LEN=255)          :: ErrMsg,       ThisLoc,     VarUnits
+    CHARACTER(LEN=255)          :: VarAxis,      VarPositive, VarCalendar
+    CHARACTER(LEN=255)          :: VarStdName,   VarFormula
 
     ! Arrays
     INTEGER                     :: V(8)
@@ -247,44 +238,51 @@ CONTAINS
     TYPE(MetaHistItem), POINTER :: Current
     TYPE(MetaHistItem), POINTER :: IndexVarList
 
-    !=======================================================================
+    !========================================================================
     ! Initialize
-    !=======================================================================
-    RC          =  GC_SUCCESS
-    Current     => NULL()
+    !========================================================================
+    RC           =  GC_SUCCESS
+    RC2          =  GC_SUCCESS
+    Current      => NULL()
     IndexVarList => NULL()
-    ErrMsg      =  ''
-    ThisLoc     =  ' -> at History_Netcdf_Define (in History/history_mod.F90)'
-    FileName    =  ''
-    VarAxis     =  ''
-    VarCalendar =  ''
-    VarPositive =  ''
-    VarUnits    =  ''
-    yyyymmdd    =  Container%CurrentYmd
-    hhmmss      =  Container%CurrentHms
+    ErrMsg       =  ''
+    ThisLoc      =  ' -> at History_Netcdf_Define (in History/history_mod.F90)'
+    FileName     =  ''
+    VarAxis      =  ''
+    VarCalendar  =  ''
+    VarPositive  =  ''
+    VarUnits     =  ''
+    appendToFile = .FALSE.
+    yyyymmdd     =  Container%CurrentYmd
+    hhmmss       =  Container%CurrentHms
 
-    !=======================================================================
-    ! Create the netCDF file with global attributes
+    ! Test if this collection is a restart file (for which we will always
+    ! want to create a new file instead of appending to an open file).
+    isRestart = ( INDEX( To_UpperCase(TRIM(Container%Name)), 'RESTART' ) > 0 )
+
+    !========================================================================
+    ! Create the netCDF file with global attributes (or append)
     ! Do not exit netCDF define mode just yet
-    !=======================================================================
+    !========================================================================
     IF ( .not. Container%IsFileOpen ) THEN
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! Compute reference date and time fields in the HISTORY CONTAINER
        ! These are needed to compute the time stamps for each data field
        ! that is written to the netCDF file.  Also resets the current
        ! time slice index.
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
 
        ! Reset the current time slice index
        Container%CurrTimeSlice = 0
 
        IF ( Container%Operation == ACCUM_FROM_SOURCE ) THEN
 
-          !-----------------------------
-          ! TIME-AVERAGED COLLECTIONS
-          !-----------------------------
+          !------------------------------------------------------------------
+          ! %%% TIME-AVERAGED COLLECTIONS %%%
+          !------------------------------------------------------------------
 
+          ! REFERENCE TIMESTAMP:
           ! Subtract the file write alarm interval that we added to
           ! the current date/time (CurrentJd) field at initialization
           Container%ReferenceJsec = Container%CurrentJsec                    &
@@ -292,46 +290,28 @@ CONTAINS
 
        ELSE
 
-          !-----------------------------
-          ! INSTANTANEOUS COLLECTIONS
-          !-----------------------------
+          !------------------------------------------------------------------
+          ! %%% INSTANTANEOUS COLLECTIONS %%%
+          !------------------------------------------------------------------
 
-          ! If this is the first time we are writing a file, then set
-          ! the reference date/time to the date/time at the start of
-          ! the simulation (EpochJd).  This will make sure the file names
-          ! and timestamps in all instantaneous files will be consistent.
-          ! For all future file writes, set the reference date/time to the
-          ! current date/time (CurrentJd).
-          IF ( Container%FirstInst ) THEN
-             Container%ReferenceJsec = Container%EpochJsec
-             Container%FirstInst   = .FALSE.
-          ELSE
-             Container%ReferenceJsec = Container%CurrentJsec
-          ENDIF
+          ! REFERENCE TIMESTAMP: Use the date/time when the file is created.
+          Container%ReferenceJsec = Container%CurrentJsec
+
        ENDIF
 
-       ! Convert the reference time from Astronomical Julian Seconds
-       ! to Astronomical Julian Date.  This is needed for the conversion
-       ! to calendar date and time via routine CALDATE.
+       ! Convert reference time from Astronomical Julian Seconds to date/time
        Container%ReferenceJd = Container%ReferenceJsec / SECONDS_PER_DAY
-
-       ! Recompute the ReferenceYmd and ReferenceHms fields
        CALL CalDate( JulianDay = Container%ReferenceJd,                      &
                      yyyymmdd  = Container%ReferenceYmd,                     &
                      hhmmss    = Container%ReferenceHms                     )
 
-       !--------------------------------------------------------------------
        ! Replace time and date tokens in the netCDF file name
-       !--------------------------------------------------------------------
-
-       ! Save the collection's file name in a temporary variable
+       ! (Save the collection's file name in a temporary variable)
        FileName = TRIM( Container%FileName )
-
-       ! Replace date and time tokens in the file name
        CALL Expand_Date_Time( DateStr    = FileName,                         &
                               yyyymmdd   = Container%ReferenceYmd,           &
                               hhmmss     = Container%ReferenceHms,           &
-                              MAPL_Style = .TRUE. )
+                              MAPL_Style = .TRUE.                           )
 
 !------------------------------------------------------------------------------
 ! TEMPORARY FIX (bmy, 9/20/17)
@@ -362,35 +342,38 @@ CONTAINS
        ! Get the number of levels (nLev) and level interfaces (nIlev)
        CALL Get_Number_Of_Levels( Container, nLev, nIlev )
 
-       ! Do not create netCDF file on first timestep if instantaneous collection
-       ! and frequency = duration. This will avoid creation of a netCDF file
-       ! containing all missing values.
-       IF ( TRIM( Container%UpdateMode ) == 'instantaneous'       .and. &
-            Container%UpdateIvalSec == Container%FileCloseIvalSec .and. &
-            Container%FileCloseAlarm  == 0.0  ) THEN
+       !---------------------------------------------------------------------
+       ! Do not create netCDF file on first timestep if instantaneous
+       ! collection and frequency = duration. This will avoid creating
+       ! of a netCDF file containing all missing values.
+       !---------------------------------------------------------------------
+       IF ( Container%Operation      == COPY_FROM_SOURCE            .and.    &
+            Container%UpdateIvalSec  == Container%FileCloseIvalSec  .and.    &
+            Container%FileCloseAlarm == 0.0                        ) THEN
           RETURN
+
        ELSE
 
+          !------------------------------------------------------------------
+          ! Create the file and add global attributes
+          ! Remain in netCDF define mode upon exiting this routine
+          !
+          ! NOTE: Container%Reference is a global attribute lists the
+          ! GEOS-Chem web and wiki page.  It has nothing to do with the
+          ! reference data/time computed by History_Set_RefDateTime.
+          !------------------------------------------------------------------
+
           ! Echo info about the file we are creating
-          IF ( am_I_Root ) THEN
+          IF ( Input_Opt%amIRoot ) THEN
              WRITE( 6, 100 ) TRIM( Container%Name ),                         &
                              Container%ReferenceYmd,                         &
                              Container%ReferenceHms
              WRITE( 6, 110 ) TRIM( FileName       )
           ENDIF
-100       FORMAT( '     - Creating file for ', a, '; reference = ',i8.8,1x,i6.6)
-110       FORMAT( '        with filename = ', a                                )
 
-          !--------------------------------------------------------------------
-          ! Create the file and add global attributes
-          ! Remain in netCDF define mode upon exiting this routine
-          !
-          ! NOTE: Container%Reference is a global attribute lists the GEOS-Chem
-          ! web and wiki page.  It has nothing to do with the reference date
-          ! and time fields that are computed by History_Set_RefDateTime.
-          !--------------------------------------------------------------------
+          ! Create the file
           CALL Nc_Create( Create_Nc4     = .TRUE.,                           &
-                          NcFile         = FileName,                         &
+                          NcFile         = fileName,                         &
                           nLon           = Container%nX,                     &
                           nLat           = Container%nY,                     &
                           nLev           = nLev,                             &
@@ -412,29 +395,34 @@ CONTAINS
                           LatId          = Container%yDimId,                 &
                           LonId          = Container%xDimId,                 &
                           KeepDefMode    = .TRUE.,                           &
-                          Varct          = VarCt                               )
-
-          !--------------------------------------------------------------------
-          ! Denote that the file has been created and is open
-          !--------------------------------------------------------------------
-          Container%IsFileOpen = .TRUE.
+                          Varct          = VarCt                            )
 
        ENDIF
 
+       !---------------------------------------------------------------------
+       ! Denote that the file has been created and is open
+       !---------------------------------------------------------------------
+       Container%IsFileOpen = .TRUE.
+
     ENDIF
 
-    !=======================================================================
+    ! Format strings for use above
+100 FORMAT( '     - Creating file for ',  a, '; reference = ',i8.8,1x,i6.6 )
+110 FORMAT( '        with filename = ', a                                  )
+
+    !========================================================================
     ! Define all of the Create the netCDF file with global attributes
-    !=======================================================================
+    ! Skip if we are appending to an existing file
+    !========================================================================
     IF ( .not. Container%IsFileDefined ) THEN
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! Define the index variables
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
 
        ! Define the linked list of index variables (IndexVarList) that
        ! have the same dimension subsets as the current container
-       CALL IndexVarList_Create( am_I_Root, Container, IndexVarList, RC )
+       CALL IndexVarList_Create( Input_Opt, Container, IndexVarList, RC )
        IF ( RC /= GC_SUCCESS ) THEN
           ErrMsg = 'Error encountered in "History_NetCdf_Init"!'
           CALL GC_Error( ErrMsg, RC, ThisLoc )
@@ -467,7 +455,7 @@ CONTAINS
                                VarFormula   = VarFormula                    )
 
           ! Set a flag for the precision of the data
-          IF ( Current%Item%Source_KindVal == KINDVAL_F4 ) THEN
+          IF ( Current%Item%Output_KindVal == KINDVAL_F4 ) THEN
              DataType = 4
           ELSE
              DataType = 8
@@ -494,7 +482,7 @@ CONTAINS
                            FormulaTerms = VarFormula                        )
 
           ! Debug print
-          !CALL HistItem_Print( am_I_Root, Current%Item, RC )
+          !CALL HistItem_Print( Current%Item, RC )
 
           ! Go to next entry in the list of HISTORY ITEMS
           Current => Current%Next
@@ -503,9 +491,9 @@ CONTAINS
        ! Free pointers
        Current => NULL()
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! Then define each HISTORY ITEM belonging to this collection
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
 
        ! Set CURRENT to the first node in the list of HISTORY ITEMS
        Current => Container%HistItems
@@ -528,23 +516,32 @@ CONTAINS
              VarUnits = Container%Spc_Units
           ENDIF
 
-          ! Define each HISTORY ITEM in this collection
-          ! as a variable in the netCDF file
-          CALL Nc_Var_Def( DefMode      = .TRUE.,                            &
-                           Compress     = .TRUE.,                            &
-                           fId          = Container%FileId,                  &
-                           DataType     = 4,                                 &
-                           VarName      = Current%Item%Name,                 &
-                           VarCt        = Current%Item%NcVarId,              &
-                           timeId       = Current%Item%NcTDimId,             &
-                           levId        = Current%Item%NcZDimId,             &
-                           iLevId       = Current%Item%NcIDimId,             &
-                           latId        = Current%Item%NcYDimId,             &
-                           lonId        = Current%Item%NcXDimId,             &
-                           VarLongName  = Current%Item%LongName,             &
-                           VarUnit      = VarUnits,                          &
-                           MissingValue = Current%Item%MissingValue,         &
-                           AvgMethod    = Current%Item%AvgMethod            )
+          ! Set a flag for the precision of the data
+          IF ( Current%Item%Output_KindVal == KINDVAL_F4 ) THEN
+             DataType = 4
+          ELSE
+             DataType = 8
+          ENDIF
+
+          !---------------------------------------------------------------
+          ! Define a HISTORY ITEM in this collection as a 4-byte real
+          ! or 8-byte real data variable for the netCDF file output
+          !---------------------------------------------------------------
+          CALL Nc_Var_Def( DefMode      = .TRUE.,                         &
+                           Compress     = .TRUE.,                         &
+                           fId          = Container%FileId,               &
+                           DataType     = DataType,                       &
+                           VarName      = Current%Item%Name,              &
+                           VarCt        = Current%Item%NcVarId,           &
+                           timeId       = Current%Item%NcTDimId,          &
+                           levId        = Current%Item%NcZDimId,          &
+                           iLevId       = Current%Item%NcIDimId,          &
+                           latId        = Current%Item%NcYDimId,          &
+                           lonId        = Current%Item%NcXDimId,          &
+                           VarLongName  = Current%Item%LongName,          &
+                           VarUnit      = VarUnits,                       &
+                          !MissingValue = Current%Item%MissingValue,      &
+                           AvgMethod    = Current%Item%AvgMethod         )
 
 #if defined( NC_HAS_COMPRESSION )
           ! Turn on netCDF chunking for this HISTORY ITEM
@@ -579,9 +576,9 @@ CONTAINS
        ! Free pointers
        Current => NULL()
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! Write the index variable data
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
 
        ! Close definition section
        CALL Nc_Set_DefMode( Container%FileId, Off=.TRUE. )
@@ -624,12 +621,12 @@ CONTAINS
        ! Free pointers
        Current => NULL()
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! We can now consider this collection to have been "defined"
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        Container%IsFileDefined = .TRUE.
 
-       CALL IndexVarList_Destroy( am_I_Root, IndexVarList, RC )
+       CALL IndexVarList_Destroy( IndexVarList, RC )
        IF ( RC /= GC_SUCCESS ) THEN
           ErrMsg = 'Error returned from "History_Netcdf_Cleanup"!'
           CALL GC_Error( ErrMsg, RC, ThisLoc )
@@ -653,20 +650,23 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE History_Netcdf_Write( am_I_Root, Container, RC )
+  SUBROUTINE History_Netcdf_Write( Input_Opt, Container, RC )
 !
 ! !USES:
 !
     USE ErrCode_Mod
-    USE HistItem_Mod,       ONLY : HistItem
-    USE HistContainer_Mod,  ONLY : HistContainer
+    USE HistItem_Mod,        ONLY : HistItem
+    USE HistContainer_Mod,   ONLY : HistContainer
     USE History_Util_Mod
-    USE M_Netcdf_Io_Write,  ONLY : NcWr
-    USE MetaHistItem_Mod,   ONLY : MetaHistItem
+    USE Input_Opt_Mod,       ONLY : OptInput
+    USE M_Netcdf_Io_Write,   ONLY : NcWr
+    USE MetaHistItem_Mod,    ONLY : MetaHistItem
+    USE Registry_Params_Mod, ONLY : KINDVAL_F4
+
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,             INTENT(IN)  :: am_I_Root ! Are we on the root CPU?
+    TYPE(OptInput),      INTENT(IN)  :: Input_Opt ! Input Options object
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -683,9 +683,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  03 Aug 2017 - R. Yantosca - Initial version
-!  18 Sep 2017 - R. Yantosca - Elapsed time is now in seconds, but keep the
-!                              time vector in minutes since the ref date/time
-!  11 Jul 2018 - R. Yantosca - Pass args in seconds to COMPUTE_ELAPSED_TIME
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -693,6 +691,7 @@ CONTAINS
 ! !LOCAL VARIABLES:
 !
     ! Scalars
+    LOGICAL                     :: output4Bytes
     INTEGER                     :: NcFileId,         NcVarId
     INTEGER                     :: Dim1,             Dim2,       Dim3
 
@@ -704,30 +703,33 @@ CONTAINS
     INTEGER                     :: St2d(2),          Ct2d(2)
     INTEGER                     :: St3d(3),          Ct3d(3)
     INTEGER                     :: St4d(4),          Ct4d(4)
-    REAL(f4),       ALLOCATABLE :: NcData_1d(:    )
-    REAL(f4),       ALLOCATABLE :: NcData_2d(:,:  )
-    REAL(f4),       ALLOCATABLE :: NcData_3d(:,:,:)
-    REAL(f8)                    :: NcTimeVal(1    )
+    REAL(f4),       ALLOCATABLE :: NcData_1d4(:    )
+    REAL(f4),       ALLOCATABLE :: NcData_2d4(:,:  )
+    REAL(f4),       ALLOCATABLE :: NcData_3d4(:,:,:)
+    REAL(f8),       ALLOCATABLE :: NcData_1d8(:    )
+    REAL(f8),       ALLOCATABLE :: NcData_2d8(:,:  )
+    REAL(f8),       ALLOCATABLE :: NcData_3d8(:,:,:)
+    REAL(f8)                    :: NcTimeVal (1    )
 
     ! Objects
     TYPE(MetaHistItem), POINTER :: Current
     TYPE(HistItem),     POINTER :: Item
 
-    !=======================================================================
+    !========================================================================
     ! Make sure the netCDF file is open and defined
-    !=======================================================================
-    IF ( ( .not. Container%IsFileOpen   )    .and.                          &
+    !========================================================================
+    IF ( ( .not. Container%IsFileOpen   )    .and.                           &
          ( .not. Container%IsFileDefined ) ) THEN
        RC     = GC_FAILURE
-       ErrMsg = 'NetCDF file is not open or defined for collection: ' // &
+       ErrMsg = 'NetCDF file is not open or defined for collection: '     // &
                  TRIM( Container%Name )
        CALL GC_Error( ErrMsg, RC, ThisLoc )
        RETURN
     ENDIF
 
-    !=======================================================================
+    !========================================================================
     ! Initialize
-    !=======================================================================
+    !========================================================================
     RC        =  GC_SUCCESS
     Dim1      =  UNDEFINED_INT
     Dim2      =  UNDEFINED_INT
@@ -739,16 +741,16 @@ CONTAINS
     ThisLoc   =  &
          ' -> at History_Netcdf_Write (in History/history_netcdf_mod.F90)'
 
-    !=======================================================================
+    !========================================================================
     ! Compute time elapsed since the reference time
-    !=======================================================================
+    !========================================================================
 
     ! Increment the time index for the netCDF file
     Container%CurrTimeSlice = Container%CurrTimeSlice + 1
 
-    !=======================================================================
+    !========================================================================
     ! Compute the time stamp value for the current time slice
-    !=======================================================================
+    !========================================================================
 
     ! Compute the elapsed time in seconds since the file creation
     CALL Compute_Elapsed_Time( CurrentJsec  = Container%CurrentJsec,         &
@@ -765,17 +767,15 @@ CONTAINS
     ! Convert to minutes since the reference time
     Container%TimeStamp = Container%TimeStamp / SECONDS_PER_MINUTE
 
-#if defined( DEBUG )
     ! Debug output
-    IF ( am_I_Root ) THEN
+    IF ( Input_Opt%LPRT .and. Input_opt%amIRoot ) THEN
        WRITE( 6, 110 ) TRIM( Container%name ), Container%TimeStamp
 110    FORMAT( '     - Writing data to ', a, '; timestamp = ', f13.4 )
     ENDIF
-#endif
 
-    !=======================================================================
+    !========================================================================
     ! Write the time stamp to the netCDF File
-    !=======================================================================
+    !========================================================================
 
     ! netCDF start and count arrays
     St1d      = (/ Container%CurrTimeSlice /)
@@ -787,9 +787,9 @@ CONTAINS
     ! Write the time stamp to the file
     CALL NcWr( NcTimeVal, NcFileId, 'time', St1d, Ct1d )
 
-    !=======================================================================
+    !========================================================================
     ! Loop over all of the HISTORY ITEMS belonging to this collection
-    !=======================================================================
+    !========================================================================
 
     ! Set CURRENT to the first entry in the list of HISTORY ITEMS
     Current => Container%HistItems
@@ -800,23 +800,27 @@ CONTAINS
        ! Point to the HISTORY ITEM object in this entry
        Item => Current%Item
 
-       !--------------------------------------------------------------------
+       ! Does this HISTORY ITEM request output as 4-byte reals?
+       ! If not, we will assume output will be 8-byte reals.
+       output4Bytes = ( Item%Output_KindVal == KINDVAL_F4 )
+
+       !---------------------------------------------------------------------
        ! For instantaneous diagnostic quantities:
-       ! (1) Copy the Item's data array to the 4-byte local array
+       ! (1) Copy the Item's data array to the 4-byte or 8-byte local array
        ! (2) Zero the Item's data array
        ! (3) Zero the Item's update counter
        !
        ! For time-averaged diagnostic quantities:
        ! (1) Divide the Item's data array by the number diagnostic updates
-       ! (2) Copy the Item's data array to the 4-byte local array
+       ! (2) Copy the Item's data array to the 4-byte or 8-byte local array
        ! (3) Zero the Item's data array
        ! (4) Zero the Item's update counter
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        SELECT CASE( Item%SpaceDim )
 
-          !------------
+          !------------------------------------------------------------------
           ! 3-D data
-          !------------
+          !------------------------------------------------------------------
           CASE( 3 )
 
              ! Get dimensions of data
@@ -824,53 +828,92 @@ CONTAINS
              Dim2 = SIZE( Item%Data_3d, 2 )
              Dim3 = SIZE( Item%Data_3d, 3 )
 
-             ! Allocate the REAL*4 output array
-             ALLOCATE( NcData_3d( Dim1, Dim2, Dim3 ), STAT=RC )
-
-             ! Copy or average the data and store in a REAL*4 array
-             IF ( Item%Operation == COPY_FROM_SOURCE ) THEN
-                NcData_3d     = Item%Data_3d
-                Item%Data_3d  = 0.0_f8
-                Item%nUpdates = 0
+             ! Allocate the 4-byte or 8-byte output array
+             IF ( output4bytes ) THEN
+                ALLOCATE( NcData_3d4( Dim1, Dim2, Dim3 ), STAT=RC )
              ELSE
-                Item%Data_3d  = Item%Data_3d / Item%nUpdates
-                NcData_3d     = Item%Data_3d
+                ALLOCATE( NcData_3d8( Dim1, Dim2, Dim3 ), STAT=RC )
+             ENDIF
+
+             ! Copy or average the data and store in a 4-byte or 8-byte array
+             IF ( Item%Operation == COPY_FROM_SOURCE ) THEN
+
+                !%%% Instantaneous output %%%
+                IF ( output4Bytes ) THEN
+                   NcData_3d4 = Item%Data_3d
+                ELSE
+                   NcData_3d8 = Item%Data_3d
+                ENDIF
                 Item%Data_3d  = 0.0_f8
-                Item%nUpdates = 0
+                Item%nUpdates = 0.0_f8
+
+             ELSE
+
+                !%%% Time-averaged output %%%
+                Item%Data_3d  = Item%Data_3d / Item%nUpdates
+                IF ( output4Bytes ) THEN
+                   NcData_3d4 = Item%Data_3d
+                ELSE
+                   NcData_3d8 = Item%Data_3d
+                ENDIF
+                Item%Data_3d  = 0.0_f8
+                Item%nUpdates = 0.0_f8
+
              ENDIF
 
              ! Compute start and count fields
              St4d = (/ 1,    1,    1,    Container%CurrTimeSlice /)
              Ct4d = (/ Dim1, Dim2, Dim3, 1                       /)
 
-             ! Write data to disk
-             CALL NcWr( NcData_3d, NcFileId, Item%Name, St4d, Ct4d )
+             ! Write data to disk and deallocate output array
+             IF ( output4bytes ) THEN
+                CALL NcWr( NcData_3d4, NcFileId, Item%Name, St4d, Ct4d )
+                DEALLOCATE( NcData_3d4, STAT=RC )
+             ELSE
+                CALL NcWr( NcData_3d8, NcFileId, Item%Name, St4d, Ct4d )
+                DEALLOCATE( NcData_3d8, STAT=RC )
+             ENDIF
 
-             ! Deallocate output array
-             DEALLOCATE( NcData_3d, STAT=RC )
-
-          !------------
+          !------------------------------------------------------------------
           ! 2-D data
-          !------------
+          !------------------------------------------------------------------
           CASE( 2 )
 
              ! Get dimensions of data
              Dim1 = SIZE( Item%Data_2d, 1 )
              Dim2 = SIZE( Item%Data_2d, 2 )
 
-             ! Allocate the REAL*4 output array
-             ALLOCATE( NcData_2d( Dim1, Dim2 ), STAT=RC )
-
-             ! Copy or average the data and store in a REAL*4 array
-             IF ( Item%Operation == COPY_FROM_SOURCE ) THEN
-                NcData_2d     = Item%Data_2d
-                Item%Data_2d  = 0.0_f8
-                Item%nUpdates = 0
+             ! Allocate the 4-byte or 8-byte output array
+             IF ( output4bytes ) THEN
+                ALLOCATE( NcData_2d4( Dim1, Dim2 ), STAT=RC )
              ELSE
-                Item%Data_2d  = Item%Data_2d / Item%nUpdates
-                NcData_2d     = Item%Data_2d
+                ALLOCATE( NcData_2d8( Dim1, Dim2 ), STAT=RC )
+             ENDIF
+
+             ! Copy or average the data and store in a 4-byte or 8-byte array
+             IF ( Item%Operation == COPY_FROM_SOURCE ) THEN
+
+                !%%% Instantaneous output %%%
+                IF ( output4bytes ) THEN
+                   NcData_2d4 = Item%Data_2d
+                ELSE
+                   NcData_2d8 = Item%Data_2d
+                ENDIF
                 Item%Data_2d  = 0.0_f8
-                Item%nUpdates = 0
+                Item%nUpdates = 0.0_f8
+
+             ELSE
+
+                !%%% Time-averaged output %%%
+                Item%Data_2d  = Item%Data_2d / Item%nUpdates
+                IF ( output4bytes ) THEN
+                   NcData_2d4 = Item%Data_2d
+                ELSE
+                   NcData_2d8 = Item%Data_2d
+                ENDIF
+                Item%Data_2d  = 0.0_f8
+                Item%nUpdates = 0.0_f8
+
              ENDIF
 
              ! Compute start and count fields
@@ -878,50 +921,73 @@ CONTAINS
              Ct3d = (/ Dim1, Dim2, 1                       /)
 
              ! Write data to disk
-             CALL NcWr( NcData_2d, NcFileId, Item%Name, St3d, Ct3d )
+             IF ( output4bytes ) THEN
+                CALL NcWr( NcData_2d4, NcFileId, Item%Name, St3d, Ct3d )
+                DEALLOCATE( NcData_2d4, STAT=RC )
+             ELSE
+                CALL NcWr( NcData_2d8, NcFileId, Item%Name, St3d, Ct3d )
+                DEALLOCATE( NcData_2d8, STAT=RC )
+             ENDIF
 
-             ! Deallocate output array
-             DEALLOCATE( NcData_2d, STAT=RC )
-
-          !------------
+          !------------------------------------------------------------------
           ! 1-D data
-          !------------
+          !------------------------------------------------------------------
           CASE( 1 )
 
              ! Get dimensions of data
              Dim1 = SIZE( Item%Data_1d, 1 )
 
-             ! Allocate the REAL*4 output array
-             ALLOCATE( NcData_1d( Dim1 ), STAT=RC )
-
-             ! Copy or average the data and store in a REAL*4 array
-             IF ( Item%Operation == COPY_FROM_SOURCE ) THEN
-                NcData_1d     = Item%Data_1d
-                Item%Data_1d  = 0.0_f8
-                Item%nUpdates = 0
+             ! Allocate the 4-byte or 8-byte output array
+             IF ( output4bytes ) THEN
+                ALLOCATE( NcData_1d4( Dim1 ), STAT=RC )
              ELSE
-                Item%Data_1d  = Item%Data_1d / Item%nUpdates
-                NcData_1d     = Item%Data_1d
-                Item%Data_1d  = 0.0_f8
-                Item%nUpdates = 0
+                ALLOCATE( NcData_1d8( Dim1 ), STAT=RC )
              ENDIF
 
+             ! Copy or average the data and store in a 4-byte or 8-byte array
+             IF ( Item%Operation == COPY_FROM_SOURCE ) THEN
+
+                !%%% Instantaneous output %%%
+                IF ( output4bytes ) THEN
+                   NcData_1d4 = Item%Data_1d
+                ELSE
+                   NcData_1d8 = Item%Data_1d
+                ENDIF
+                Item%Data_1d  = 0.0_f8
+                Item%nUpdates = 0.0_f8
+
+             ELSE
+
+                ! %%% Time-averaged output %%%
+                Item%Data_1d  = Item%Data_1d / Item%nUpdates
+                IF ( output4bytes ) THEN
+                   NcData_1d4 = Item%Data_1d
+                ELSE
+                   NcData_1d8 = Item%Data_1d
+                ENDIF
+                Item%Data_1d  = 0.0_f8
+                Item%nUpdates = 0.0_f8
+
+             ENDIF
 
              ! Compute start and count fields
              St2d = (/ 1,    Container%CurrTimeSlice /)
              Ct2d = (/ Dim1, 1                       /)
 
              ! Write data to disk
-             CALL NcWr( NcData_1d, NcFileId, Item%Name, St2d, Ct2d )
-
-             ! Deallocate output array
-             DEALLOCATE( NcData_1d, STAT=RC )
+             IF ( output4bytes ) THEN
+                CALL NcWr( NcData_1d4, NcFileId, Item%Name, St2d, Ct2d )
+                DEALLOCATE( NcData_1d4, STAT=RC )
+             ELSE
+                CALL NcWr( NcData_1d8, NcFileId, Item%Name, St2d, Ct2d )
+                DEALLOCATE( NcData_1d8, STAT=RC )
+             ENDIF
 
        END SELECT
 
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        ! Go to next entry in the list of HISTORY ITEMS
-       !--------------------------------------------------------------------
+       !---------------------------------------------------------------------
        Current => Current%Next
        Item    => NULL()
     ENDDO
@@ -971,6 +1037,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  06 Jan 2015 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -987,18 +1054,18 @@ CONTAINS
     CHARACTER(LEN=2) :: HourStr,       MinuteStr,  SecondStr
     CHARACTER(LEN=4) :: YearStr
 
-    !=======================================================================
+    !========================================================================
     ! Initialize
-    !=======================================================================
+    !========================================================================
     IF ( PRESENT( MAPL_Style ) ) THEN
        Is_Mapl_Style = MAPL_Style
     ELSE
        Is_Mapl_Style = .FALSE.
     ENDIF
 
-    !=======================================================================
+    !========================================================================
     ! Split the date and time into individal variables
-    !=======================================================================
+    !========================================================================
 
     ! Extract year/month/day and hour/minute/seconds from the time
     CALL Ymd_Extract( yyyymmdd, Year, Month,  Day    )
@@ -1012,9 +1079,9 @@ CONTAINS
     WRITE( MinuteStr, '(i2.2)' ) Minute
     WRITE( SecondStr, '(i2.2)' ) Second
 
-    !=======================================================================
+    !========================================================================
     ! Replace the date and time tokens in the string
-    !=======================================================================
+    !========================================================================
 
     IF ( Is_Mapl_Style ) THEN
 
@@ -1098,6 +1165,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  10 Aug 2017 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1117,9 +1185,9 @@ CONTAINS
     CHARACTER(LEN=255) :: TmpAxis,        TmpCalendar,  TmpStdName
     CHARACTER(LEN=255) :: TmpPositive,    TmpUnits,     TmpFormula
 
-    !=======================================================================
+    !========================================================================
     ! Initialize
-    !=======================================================================
+    !========================================================================
     TmpAxis         = ''
     TmpCalendar     = ''
     TmpPositive     = ''
@@ -1150,9 +1218,9 @@ CONTAINS
        IsOnLevelEdges = .FALSE.
     ENDIF
 
-    !=======================================================================
+    !========================================================================
     ! Return relevant dim ID's and metadata for the HISTORY ITEM
-    !=======================================================================
+    !========================================================================
     SELECT CASE( TRIM( Item%Name ) )
 
        ! lon
@@ -1311,7 +1379,7 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE IndexVarList_Create( am_I_Root, Container, IndexVarList, RC )
+  SUBROUTINE IndexVarList_Create( Input_Opt, Container, IndexVarList, RC )
 !
 ! !USES:
 !
@@ -1319,11 +1387,12 @@ CONTAINS
     USE Grid_Registry_Mod, ONLY : Lookup_Grid
     USE HistContainer_Mod, ONLY : HistContainer
     USE HistItem_Mod
+    USE Input_Opt_Mod,     ONLY : OptInput
     USE MetaHistItem_Mod
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,             INTENT(IN)  :: am_I_Root    ! Are we on the root core?
+    TYPE(OptInput),      INTENT(IN)  :: Input_Opt    ! Input Options object
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -1339,9 +1408,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  10 Aug 2017 - R. Yantosca - Initial version
-!  25 Aug 2017 - R. Yantosca - Added index arrays for data on level edges
-!  29 May 2019 - R. Yantosca - Now accept Container, IndexVarList arguments,
-!                              so that we can subset the data region
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1351,7 +1418,8 @@ CONTAINS
     ! Scalars
     LOGICAL                  :: OnLevelEdges
     INTEGER                  :: N
-    INTEGER                  :: KindVal
+    INTEGER                  :: Output_KindVal
+    INTEGER                  :: Source_KindVal
     INTEGER                  :: Rank
     INTEGER                  :: nILev
     INTEGER                  :: nLev
@@ -1381,26 +1449,27 @@ CONTAINS
     ! Objects
     TYPE(HistItem),  POINTER :: Item
 
-    !=======================================================================
+    !========================================================================
     ! Initialize
-    !=======================================================================
-    RC           =  GC_SUCCESS
-    Description  =  ''
-    Dimensions   =  0
-    KindVal      =  0
-    Rank         =  0
-    Units        =  ''
-    ErrMsg       =  ''
-    ThisLoc      =  &
-                ' -> at History_Netcdf_Init (in History/history_mod.F90)'
+    !========================================================================
+    RC             =  GC_SUCCESS
+    Description    =  ''
+    Dimensions     =  0
+    Source_KindVal =  0
+    Output_KindVal =  0
+    Rank           =  0
+    Units          =  ''
+    ErrMsg         =  ''
+    ThisLoc        =  &
+         ' -> at History_Netcdf_Init (in History/history_mod.F90)'
     Ptr0d_8      => NULL()
     Ptr1d_8      => NULL()
     Ptr2d_4      => NULL()
 
-    !=======================================================================
+    !========================================================================
     ! Define the names that will be used to create the HISTORY ITEMS
     ! for fields to be used as netCDF metadata
-    !=======================================================================
+    !========================================================================
 
     ! Fields saved in the Registry object in GeosUtil/grid_registry_mod.F90
     RegistryName(1 ) = 'GRID_AREA'
@@ -1441,9 +1510,9 @@ CONTAINS
     ItemDimName(10)  = 'z'
     ItemDimName(11)  = 't'
 
-    !=======================================================================
+    !========================================================================
     ! Pick the dimensions of the lev and ilev variables properly
-    !=======================================================================
+    !========================================================================
 
     ! Get the number of levels (nLev) and level interfaces (nIlev)
     CALL Get_Number_Of_Levels( Container, nLev, nIlev )
@@ -1454,27 +1523,28 @@ CONTAINS
     Subset_Zc = (/ Container%Z0, nLev         /)
     Subset_Ze = (/ Container%Z0, nILev        /)
 
-    !=======================================================================
+    !========================================================================
     ! Create a HISTORY ITEM for each of the index fields (lon, lat, area)
     ! of grid_registry_mod.F90 and add them to a METAHISTORY ITEM list
-    !=======================================================================
+    !========================================================================
     DO N = 1, SIZE( RegistryName )
 
        !---------------------------------------------------------------------
        ! Look up one of the index fields from gc_grid_mod.F90
        !---------------------------------------------------------------------
-       CALL Lookup_Grid( am_I_Root    = am_I_Root,                           &
-                         Variable     = RegistryName(N),                     &
-                         Description  = Description,                         &
-                         Dimensions   = Dimensions,                          &
-                         KindVal      = KindVal,                             &
-                         Rank         = Rank,                                &
-                         Units        = Units,                               &
-                         OnLevelEdges = OnLevelEdges,                        &
-                         Ptr0d_8      = Ptr0d_8,                             &
-                         Ptr1d_8      = Ptr1d_8,                             &
-                         Ptr2d_4      = Ptr2d_4,                             &
-                         RC           = RC                                  )
+       CALL Lookup_Grid( Input_Opt      = Input_Opt,                         &
+                         Variable       = RegistryName(N),                   &
+                         Description    = Description,                       &
+                         Dimensions     = Dimensions,                        &
+                         Source_KindVal = Source_KindVal,                    &
+                         Output_KindVal = Output_KindVal,                    &
+                         Rank           = Rank,                              &
+                         Units          = Units,                             &
+                         OnLevelEdges   = OnLevelEdges,                      &
+                         Ptr0d_8        = Ptr0d_8,                           &
+                         Ptr1d_8        = Ptr1d_8,                           &
+                         Ptr2d_4        = Ptr2d_4,                           &
+                         RC             = RC                                )
 
        ! Trap potential error
        IF ( RC /= GC_SUCCESS ) THEN
@@ -1496,7 +1566,7 @@ CONTAINS
        !---------------------------------------------------------------------
        ! Create a HISTORY ITEM for this index field
        !---------------------------------------------------------------------
-       CALL HistItem_Create( am_I_Root      = am_I_Root,                     &
+       CALL HistItem_Create( Input_Opt      = Input_Opt,                     &
                              Item           = Item,                          &
                              Id             = N,                             &
                              ContainerId    = 0,                             &
@@ -1510,7 +1580,8 @@ CONTAINS
                              Subset_X       = Subset_X,                      &
                              Subset_Y       = Subset_Y,                      &
                              Subset_Z       = Subset_Z,                      &
-                             Source_KindVal = KindVal,                       &
+                             Source_KindVal = Source_KindVal,                &
+                             Output_KindVal = Output_KindVal,                &
                              Source_0d_8    = Ptr0d_8,                       &
                              Source_1d_8    = Ptr1d_8,                       &
                              Source_2d_4    = Ptr2d_4,                       &
@@ -1525,12 +1596,12 @@ CONTAINS
 
        !### Debug: Print full info about this HISTORY ITEM
        !### You can leave this commented out unless you are debugging
-       !CALL HistItem_Print( am_I_Root, Item, RC )
+       !CALL HistItem_Print( Item, RC )
 
        !---------------------------------------------------------------------
        ! Add this item to the Dimension list
        !---------------------------------------------------------------------
-       CALL MetaHistItem_AddNew( am_I_Root = am_I_Root,                      &
+       CALL MetaHistItem_AddNew( Input_Opt    = Input_Opt,                   &
                                  Node      = IndexVarList,                   &
                                  Item      = Item,                           &
                                  RC        = RC                             )
@@ -1559,16 +1630,12 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE IndexVarList_Destroy( am_I_Root, IndexVarList, RC )
+  SUBROUTINE IndexVarList_Destroy( IndexVarList, RC )
 !
 ! !USES:
 !
     USE ErrCode_Mod
-    USE MetaHistItem_Mod,  ONLY: MetaHistItem_Destroy
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,             INTENT(IN)  :: am_I_Root    ! Are we on the root core?
+    USE MetaHistItem_Mod,  ONLY : MetaHistItem_Destroy
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -1581,7 +1648,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  10 Aug 2017 - R. Yantosca - Initial version
-!  29 May 2019 - R. Yantosca - Renamed from History_Netcdf_Cleanup
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1591,17 +1658,17 @@ CONTAINS
     ! Strings
     CHARACTER(LEN=255) :: ErrMsg, ThisLoc
 
-    !=======================================================================
+    !========================================================================
     ! Initialize
-    !=======================================================================
+    !========================================================================
     RC      = GC_SUCCESS
     ErrMsg  =  ''
     ThisLoc =  ' -> at MetaHistItem_Destroy (in History/metahistitem_mod.F90)'
 
-    !=======================================================================
+    !========================================================================
     ! Destroy the METAHISTORY ITEM list of index variables for netCDF
-    !=======================================================================
-    CALL MetaHistItem_Destroy( am_I_Root, IndexVarList, RC )
+    !========================================================================
+    CALL MetaHistItem_Destroy( IndexVarList, RC )
     IF ( RC /= GC_SUCCESS ) THEN
        ErrMsg = 'Cannot deallocate the "IndexVarList" META HISTORY ITEM!'
        CALL GC_Error( ErrMsg, RC, ThisLoc )
@@ -1640,18 +1707,19 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  05 Jun 2019 - R. Yantosca - Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
 
-    !=======================================================================
+    !========================================================================
     ! Pick the dimensions of the lev and ilev variables properly
     ! so that we can use that for writing to then netCDF files.
     !
     ! If the vertical dimension (Container%NZ) is undefined, then
     ! this indicates that there is only 2-D data in the collection.
     ! Thus, there will be 1 level (the surface) and 2 level edges.
-    !=======================================================================
+    !========================================================================
     IF ( Container%OnLevelEdges ) THEN
        nILev = MAX( Container%NZ, 2 )
        nLev  = nILev - 1

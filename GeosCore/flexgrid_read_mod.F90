@@ -1,4 +1,4 @@
-#if !defined( ESMF_ ) && !defined( MODEL_WRF )
+#if defined( MODEL_CLASSIC )
 !------------------------------------------------------------------------------
 !                  GEOS-Chem Global Chemical Transport Model                  !
 !------------------------------------------------------------------------------
@@ -16,17 +16,12 @@ MODULE FlexGrid_Read_Mod
 !
 ! !USES:
 !
-
-  ! GEOS-Chem modules
-  USE CMN_SIZE_MOD                        ! Size parameters
   USE ERROR_MOD,     ONLY : ERROR_STOP    ! Stop w/ error message
   USE PhysConstants                       ! Physical constants
   USE TIME_MOD                            ! Date & time routines
 
   IMPLICIT NONE
   PRIVATE
-
-# include "netcdf.inc"                    ! Include file for netCDF library
 !
 ! !PRIVATE MEMBER FUNCTIONS:
 !
@@ -50,7 +45,7 @@ MODULE FlexGrid_Read_Mod
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -98,7 +93,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -213,7 +208,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -579,7 +574,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -680,7 +675,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -800,7 +795,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -923,7 +918,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1038,7 +1033,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1118,7 +1113,6 @@ CONTAINS
        CALL Get_Met_2D( State_Grid, Q2, TRIM(v_name) )
        State_Met%CONV_DEPTH = Q2
 
-
     ELSE
 
        ! Print message to log file
@@ -1137,10 +1131,6 @@ CONTAINS
     stamp = TimeStamp_String( YYYYMMDD, HHMMSS )
     WRITE( 6, 10 ) stamp
  10 FORMAT( '     - Found all A3mstE met fields for ', a )
-
-    !=================================================================
-    ! Diagnostics, cleanup and quit
-    !=================================================================
 
     ! CLDTOPS = highest location of CMFMC in the column (I,J)
     DO J = 1, State_Grid%NY
@@ -1205,7 +1195,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1366,7 +1356,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  30 Jan 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1513,7 +1503,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  13 Apr 2004 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC

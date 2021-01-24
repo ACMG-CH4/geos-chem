@@ -23,18 +23,13 @@ MODULE Set_Global_CH4_Mod
 ! !PUBLIC MEMBER FUNCTIONS:
 !
   PUBLIC :: Set_CH4
-  PUBLIC :: Cleanup_Set_Global_CH4
 !
 ! !REVISION HISTORY:
 !  18 Jan 2018 - M. Sulprizio- Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
-!
-! !PRIVATE TYPES:
-!
-  REAL(f4), POINTER :: SFC_CH4(:,:) => NULL() ! Global surface CH4
-
 CONTAINS
 !EOC
 !------------------------------------------------------------------------------
@@ -50,17 +45,16 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Set_CH4( am_I_Root,  Input_Opt,  State_Chm, &
-                      State_Diag, State_Grid, State_Met, RC )
+  SUBROUTINE Set_CH4( Input_Opt, State_Chm, State_Diag, State_Grid, &
+                      State_Met, RC )
 !
 ! !USES:
 !
-    USE CMN_SIZE_MOD
     USE ErrCode_Mod
     USE ERROR_MOD
-    USE HCO_EMISLIST_MOD,  ONLY : HCO_GetPtr
     USE HCO_Error_Mod
-    USE HCO_INTERFACE_MOD, ONLY : HcoState
+    USE HCO_Calc_Mod,      ONLY : HCO_EvalFld
+    USE HCO_State_GC_Mod,  ONLY : HcoState
     USE Input_Opt_Mod,     ONLY : OptInput
     USE State_Chm_Mod,     ONLY : ChmState, Ind_
     USE State_Diag_Mod,    ONLY : DgnState
@@ -74,7 +68,6 @@ CONTAINS
 !
 ! !INPUT PARAMETERS:
 !
-    LOGICAL,        INTENT(IN)    :: am_I_Root ! Are we on the root CPU?
     TYPE(OptInput), INTENT(IN)    :: Input_Opt ! Input Options object
     TYPE(GrdState), INTENT(IN)    :: State_Grid! Grid State object
     TYPE(MetState), INTENT(IN)    :: State_Met ! Meteorology State object
@@ -99,6 +92,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  18 Jan 2018 - M. Sulprizio- Initial version
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -106,9 +100,10 @@ CONTAINS
 ! !LOCAL VARIABLES:
 !
     ! Scalars
-    INTEGER             :: I, J, L, PBL_TOP
+    INTEGER             :: I, J, L, PBL_TOP, id_CH4
     CHARACTER(LEN=63)   :: OrigUnit
     REAL(fp)            :: CH4
+    LOGICAL             :: FOUND
 #if defined( MODEL_GEOS )
     INTEGER             :: DT
     REAL(fp)            :: dCH4, MWCH4
@@ -119,12 +114,8 @@ CONTAINS
     CHARACTER(LEN=255)  :: ErrMsg
     CHARACTER(LEN=255)  :: ThisLoc
 
-    ! SAVEd variables
-    LOGICAL, SAVE       :: FIRST = .TRUE.
-    INTEGER, SAVE       :: id_CH4
-
     !=================================================================
-    ! SET_GLOBAL_CH4 begins here!
+    ! SET_CH4 begins here!
     !=================================================================
 
     ! Assume success
@@ -137,40 +128,32 @@ CONTAINS
        RETURN
     ENDIF
 
-    IF ( FIRST ) THEN
+    ! Get species ID
+    id_CH4 = Ind_( 'CH4' )
 
-       ! Get species ID
-       id_CH4 = Ind_( 'CH4' )
-
-       ! Get pointer to surface CH4 data
-       IF ( HcoState%Clock%ThisEYear > 1978 ) THEN
-           ! Use the NOAA spatially resolved data where available
-           CALL HCO_GetPtr( am_I_Root, HcoState, 'NOAA_GMD_CH4', SFC_CH4, RC )
-          IF ( RC /= GC_SUCCESS ) THEN
-             ErrMsg = 'Cannot get pointer to NOAA_GMD_CH4! Make sure it is turned on in HEMCO_Config.rc.'
-             CALL GC_Error( ErrMsg, RC, ThisLoc )
-             RETURN
-          ENDIF
-       ELSE
-           ! Use the CMIP6 data from Meinshausen et al. 2017, GMD
-           ! https://doi.org/10.5194/gmd-10-2057-2017a
-           CALL HCO_GetPtr( am_I_Root, HcoState, 'CMIP6_Sfc_CH4', SFC_CH4, RC )
-          IF ( RC /= GC_SUCCESS ) THEN
-             ErrMsg = 'Cannot get pointer to CMIP6_Sfc_CH4! Make sure it is turned on in HEMCO_Config.rc.'
-             CALL GC_Error( ErrMsg, RC, ThisLoc )
-             RETURN
-          ENDIF
-       ENDIF
-
-       ! Reset first-time flag
-       FIRST = .FALSE.
+    ! Use the NOAA spatially resolved data where available
+    CALL HCO_EvalFld( HcoState, 'NOAA_GMD_CH4', State_Chm%SFC_CH4, RC, &
+                      FOUND=FOUND )
+    IF (.NOT. FOUND ) THEN
+       FOUND = .TRUE.
+       ! Use the CMIP6 data from Meinshausen et al. 2017, GMD
+       ! https://doi.org/10.5194/gmd-10-2057-2017a
+       CALL HCO_EvalFld( HcoState, 'CMIP6_Sfc_CH4', State_Chm%SFC_CH4, RC, &
+                         FOUND=FOUND )
+    ENDIF
+    IF (.NOT. FOUND ) THEN
+       ErrMsg = 'Cannot evalaute NOAA_GMD_CH4 or CMIP6_Sfc_CH4 ' // &
+                'in HEMCO from SET_CH4! Make sure the data source ' // &
+                'corresponds to your emissions year in HEMCO_Config.rc ' // &
+                '(NOAA GMD for 1978 and later; else CMIP6).'
+       CALL GC_Error( ErrMsg, RC, ThisLoc )
+       RETURN
 
     ENDIF
 
     ! Convert species to [v/v dry] for this routine
-    CALL Convert_Spc_Units( am_I_Root,  Input_Opt, State_Chm, &
-                            State_Grid, State_Met, 'v/v dry', &
-                            RC,         OrigUnit=OrigUnit )
+    CALL Convert_Spc_Units( Input_Opt, State_Chm, State_Grid, State_Met, &
+                            'v/v dry', RC, OrigUnit=OrigUnit )
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
@@ -182,7 +165,7 @@ CONTAINS
 #if defined( MODEL_GEOS )
     ! Write out pseudo (implied) CH4 flux?
     PseudoFlux = ASSOCIATED(State_Diag%CH4pseudoFlux)
-    MWCH4      = State_Chm%SpcData(id_CH4)%Info%emMW_g
+    MWCH4      = State_Chm%SpcData(id_CH4)%Info%MW_g
     IF ( MWCH4 <= 0.0_fp ) MWCH4 = 16.0_fp
     DT         = GET_TS_DYN()
 #endif
@@ -201,7 +184,7 @@ CONTAINS
        PBL_TOP = CEILING( State_Met%PBL_TOP_L(I,J) )
 
        ! Surface CH4 from HEMCO is in units [ppbv], convert to [v/v dry]
-       CH4 = SFC_CH4(I,J) * 1e-9_fp
+       CH4 = State_Chm%SFC_CH4(I,J) * 1e-9_fp
 
 #if defined( MODEL_GEOS )
        ! Zero diagnostics
@@ -236,8 +219,8 @@ CONTAINS
     !$OMP END PARALLEL DO
 
     ! Convert species back to original unit
-    CALL Convert_Spc_Units( am_I_Root,  Input_Opt, State_Chm, &
-                            State_Grid, State_Met, OrigUnit, RC )
+    CALL Convert_Spc_Units( Input_Opt, State_Chm, State_Grid, State_Met, &
+                            OrigUnit, RC )
 
     ! Trap potential errors
     IF ( RC /= GC_SUCCESS ) THEN
@@ -247,31 +230,5 @@ CONTAINS
     ENDIF
 
   END SUBROUTINE Set_CH4
-!EOC
-!------------------------------------------------------------------------------
-!                  GEOS-Chem Global Chemical Transport Model                  !
-!------------------------------------------------------------------------------
-!BOP
-!
-! !IROUTINE: cleanup_set_global_ch4
-!
-! !DESCRIPTION: Subroutine CLEANUP\_SET\_GLOBAL\_CH4 deallocates memory from
-!  previously allocated module arrays.
-!\\
-!\\
-! !INTERFACE:
-!
-  SUBROUTINE Cleanup_Set_Global_CH4
-!
-! !REVISION HISTORY:
-!  18 Jan 2018 - M. Sulprizio- Initial version
-!EOP
-!------------------------------------------------------------------------------
-!BOC
-
-    ! Free pointers
-    SFC_CH4     => NULL()
-
-  END SUBROUTINE Cleanup_Set_Global_CH4
 !EOC
 END MODULE Set_Global_CH4_Mod

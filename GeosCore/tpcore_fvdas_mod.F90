@@ -189,17 +189,7 @@ MODULE Tpcore_FvDas_Mod
 !                             Yeh with the TPCORE routines from the GMI model.
 !                             This eliminates the polar overshoot in the
 !                             stratosphere.
-! 05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                             Declare all REAL variables as REAL(fp).  Added
-!                             OpenMP parallel loops in various routines (and
-!                             made some modifications to facilitate OpenMP).
-! 01 Apr 2009 - C. Carouge  - Modified OpenMp parallelization and move the
-!                             loops over vertical levels outside the
-!                             horizontal transport routines for reducing
-!                             processing time.
-! 20 Aug 2013 - R. Yantosca - Removed "define.h", this is now obsolete
-! 21 Nov 2014 - M. Yannetti - Added PRECISION_MOD
-! 19 Jan 2016 - E. Lundgren - Consolidated bpch and netcdf diagnostics code
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -252,11 +242,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
-!  09 Nov 2017 - R. Yantosca  - Now add State_Diag, RC as arguments
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -387,12 +373,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
-!   12 Feb 2015 - E. Lundgren - Add new diagnostic arrays for writing
-!                               diagnostics ND24, ND25, and ND26 to netcdf.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -529,29 +510,7 @@ CONTAINS
 !                              Yeh with the TPCORE routines from GMI model.
 !                              This eliminates the polar overshoot in the
 !                              stratosphere.
-!  05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                              Declare all REAL variables as REAL(fp).  Also
-!                              make sure all numerical constants are declared
-!                              with the "D" double-precision exponent.  Added
-!                              OpenMP parallel DO loops.
-!  01 Apr 2009 - C. Carouge  - Modified OpenMp parallelization and move the
-!                              loops over vertical levels outside the
-!                              horizontal transport routines for reducing
-!                              processing time.
-!  03 Dec 2009 - C. Carouge  - Modify declarations of MASSFLEW, MASSFLNS and
-!                              MASSFLUP to save memory space.
-!  30 May 2013 - S. Farina   - For TOMAS, zero out UA and VA variables
-!  04 Jun 2013 - R. Yantosca - Use assumed-shape declarations for XMASS, YMASS,
-!                              U, V, and Q arrays.  These arrays are used to
-!                              pass pointer references, so this may help to
-!                              reduce the creation of array temporaries,
-!                              which will reduce memory.
-!   5 Jun 2013 - R. Yantosca - Avoid array temporary in call to FZPPM
-!  15 Jun 2015 - E. Lundgren - Now use kg/kg total air as tracer units
-!                              (previously v/v)
-!  01 Jul 2015 - E. Lundgren - Set tracer conc to small positive number if
-!                              negative at end of advection (occurs at poles)
-!  09 Nov 2017 - R. Yantosca - Now accept State_Diag as an argument
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -568,7 +527,7 @@ CONTAINS
     INTEGER            :: jn (km)
     INTEGER            :: js (km)
     INTEGER            :: il, ij, ik, iq, k, j, i, Kflip
-    INTEGER            :: num, k2m1
+    INTEGER            :: num, k2m1, S
 
     REAL(fp)           :: dap   (km)
     REAL(fp)           :: dbk   (km)
@@ -604,7 +563,7 @@ CONTAINS
     REAL(fp)           :: fy    (im, jm+1, km, nq)    ! one more for edges
     REAL(fp)           :: fz    (im, jm,   km, nq)
     REAL(fp)           :: qtemp (im, jm,   km, nq)
-    REAL(fp)           :: DTC   (IM, JM,   KM    )    ! up/down flux temp array
+    REAL(fp)           :: DTC                         ! temporary variable
     REAL(fp)           :: TRACE_DIFF                  ! up/down flux variable
 
     LOGICAL, SAVE      :: first = .true.
@@ -986,156 +945,141 @@ CONTAINS
     ENDDO
 !$OMP END PARALLEL DO
 
-    DO iq=1,nq
-
+    !=========================================================================
+    ! MODIFICATION by Harvard Atmospheric Chemistry Modeling Group
+    !
+    ! Set tracer concentration to a small positive number if concentration
+    ! is negative. Negative concentration may occur at the poles. This
+    ! is an issue that should be looked into in the future. (ewl, 6/30/15)
+    !=========================================================================
+    WHERE ( Q < 0.0_fp )
+       Q = 1.0e-26_fp
+    ENDWHERE
+       
+    !======================================================================
+    ! MODIFICATION by Harvard Atmospheric Chemistry Modeling Group
+    !
+    ! HISTORY (aka netCDF diagnostics)
+    ! E/W flux of advected species [kg/s]  (ccarouge 12/2/08)
+    !
+    ! The unit conversion is:
+    !
+    ! Mass    P diff     100      1       area of     kg tracer      1
+    ! ----- = in grid *  ---  *  ---   *  grid box * ------------ * ---
+    ! time    box         1       g       AREA_M2    kg moist air    s
+    !
+    !  kg      hPa     Pa     s^2    m^2        1
+    ! ----  = ----- * ----- * ---- * ---- * --------
+    !  s        1      hPa     m      1       DeltaT
+    !
+    !======================================================================
+    IF ( State_Diag%Archive_AdvFluxZonal ) THEN
+         
        ! Calculate fluxes for diag. (ccc, 11/20/08)
        JS2G0  = MAX( J1P, JFIRST )     !  No ghosting
        JN2G0  = MIN( J2P, JLAST  )     !  No ghosting
 
-       !======================================================================
-       ! MODIFICATION by Harvard Atmospheric Chemistry Modeling Group
-       !
-       ! Set tracer concentration to a small positive number if concentration
-       ! is negative. Negative concentration may occur at the poles. This
-       ! is an issue that should be looked into in the future. (ewl, 6/30/15)
-       !======================================================================
-!$OMP PARALLEL DO        &
-!$OMP DEFAULT( SHARED   )&
-!$OMP PRIVATE( I, J, K )
-       DO K = 1, KM
-       DO J = 1, JM
-       DO I = 1, IM
-          IF ( q(I,J,K,IQ) < 0.0e0_fp ) THEN
-             q(I,J,K,IQ) = 1.0e-26_fp
-          ENDIF
-       ENDDO
-       ENDDO
-       ENDDO
-!$OMP END PARALLEL DO
+       ! Loop over diagnostic slots
+       !$OMP PARALLEL DO                           &
+       !$OMP DEFAULT( SHARED                     ) &
+       !$OMP PRIVATE( S, IQ, K, J, I, DTC, Kflip )
+       DO S = 1, State_Diag%Map_AdvFluxZonal%nSlots
 
-       !======================================================================
-       ! MODIFICATION by Harvard Atmospheric Chemistry Modeling Group
-       !
-       ! DIAGNOSTICS: E/W flux of advected species [kg/s]  (ccarouge 12/2/08)
-       !
-       ! The unit conversion is:
-       !
-       ! Mass    P diff     100      1       area of     kg tracer      1
-       ! ----- = in grid *  ---  *  ---   *  grid box * ------------ * ---
-       ! time    box         1       g       AREA_M2    kg moist air    s
-       !
-       !  kg      hPa     Pa     s^2    m^2        1
-       ! ----  = ----- * ----- * ---- * ---- * --------
-       !  s        1      hPa     m      1       DeltaT
-       !
-       !======================================================================
-       IF ( State_Diag%Archive_AdvFluxZonal ) THEN
+          ! Get the advectId from the slotId
+          IQ = State_Diag%Map_AdvFluxZonal%slot2Id(S)
 
-          ! Zero temp array
-          DTC = 0e+0_fp
-
-          !$OMP PARALLEL DO               &
-          !$OMP DEFAULT( SHARED         ) &
-          !$OMP PRIVATE( I, J, K, Kflip )
+          ! Loop over grid boxes
           DO K = 1,     KM
           DO J = JS2G0, JN2G0
           DO I = 1,     IM
 
              ! Compute mass flux [kg/s]
-             DTC(I,J,K) = FX(I,J,K,IQ) * AREA_M2(J) * g0_100 / DT
-
-             !----------------------------------------------------------------
-             ! HISTORY (aka netCDF diagnostics)
-             !
-             ! E/W flux of advected species
-             !
-             ! NOTE: when bpch is removed, consider rewriting loop for
-             ! efficiency (e.g. move IF statemetn outside loop)
-             !----------------------------------------------------------------
+             DTC = FX(I,J,K,IQ) * AREA_M2(J) * g0_100 / DT
 
              ! Units: [kg/s]
              ! But consider changing to area-independent units [kg/m2/s]
-             Kflip                                 = KM - K + 1 ! flip vert
-             State_Diag%AdvFluxZonal(I,J,Kflip,IQ) = DTC(I,J,K)
+             Kflip                                = KM - K + 1 ! flip vert
+             State_Diag%AdvFluxZonal(I,J,Kflip,S) = DTC
 
           ENDDO
           ENDDO
           ENDDO
-          !$OMP END PARALLEL DO
+       ENDDO
+       !$OMP END PARALLEL DO
+    ENDIF
 
-       ENDIF
+    !=======================================================================
+    ! MODIFICATION by Harvard Atmospheric Chemistry Modeling Group
+    !
+    ! HISTORY (aka netCDF diagnostics)
+    !
+    ! N/S flux of tracer [kg/s]
+    ! (bdf, bmy, 9/28/04, ccarouge 12/12/08)
+    !
+    ! NOTE, the unit conversion is the same as desciribed above for the
+    ! ND24 E-W diagnostics.  The geometrical factor was already applied to
+    ! fy in Ytp. (ccc, 4/1/09)
+    !=======================================================================
+    IF ( State_Diag%Archive_AdvFluxMerid ) THEN
 
-       !======================================================================
-       ! MODIFICATION by Harvard Atmospheric Chemistry Modeling Group
-       !
-       ! DIAGNOSTICS: N/S flux of tracer [kg/s]
-       ! (bdf, bmy, 9/28/04, ccarouge 12/12/08)
-       !
-       ! NOTE, the unit conversion is the same as desciribed above for the
-       ! ND24 E-W diagnostics.  The geometrical factor was already applied to
-       ! fy in Ytp. (ccc, 4/1/09)
-       !======================================================================
-       IF ( State_Diag%Archive_AdvFluxMerid ) THEN
+       !$OMP PARALLEL DO                           &
+       !$OMP DEFAULT( SHARED                     ) &
+       !$OMP PRIVATE( S, IQ, K, J, I, DTC, Kflip )
+       DO S = 1, State_Diag%Map_AdvFluxMerid%nSlots
 
-          ! Zero temp array
-          DTC = 0e+0_fp
+          ! Get the advectId from the slotId
+          IQ = State_Diag%Map_AdvFluxMerid%slot2Id(S)
 
-          !$OMP PARALLEL DO               &
-          !$OMP DEFAULT( SHARED         ) &
-          !$OMP PRIVATE( I, J, K, Kflip )
+          ! Loop over grid boxes
           DO K = 1, KM
           DO J = 1, JM
           DO I = 1, IM
 
              ! Compute mass flux [kg/s]
-             DTC(I,J,K) = FY(I,J,K,IQ) * AREA_M2(J) * g0_100 / DT
-
-             !----------------------------------------------------------------
-             ! HISTORY (aka netCDF diagnostics)
-             !
-             ! N/S flux of advected species
-             !
-             ! NOTE: when bpch is removed, consider rewriting loop for
-             ! efficiency (e.g. move IF statemetn outside loop)
-             !----------------------------------------------------------------
+             DTC = FY(I,J,K,IQ) * AREA_M2(J) * g0_100 / DT
 
              ! Units: [kg/s]
              ! But consider changing to area-independent units [kg/m2/s]
-             Kflip                                 = KM - K + 1  ! flip vert
-             State_Diag%AdvFluxMerid(I,J,Kflip,IQ) = DTC(I,J,K)
+             Kflip                                = KM - K + 1  ! flip vert
+             State_Diag%AdvFluxMerid(I,J,Kflip,S) = DTC
 
           ENDDO
           ENDDO
           ENDDO
-          !$OMP END PARALLEL DO
+       ENDDO
+       !$OMP END PARALLEL DO
+    ENDIF
 
-       ENDIF
+    !======================================================================
+    ! MODIFICATION by Harvard Atmospheric Chemistry Modeling Group
+    !
+    ! HISTORY (aka netCDF diagnostics)
+    !
+    ! Up/down flux of tracer [kg/s]
+    ! (bmy, bdf, 9/28/04, ccarouge 12/2/08)
+    !
+    ! The vertical transport done in qmap.  We need to find the difference
+    ! in order to to interpret transport.
+    !
+    ! Break up diagnostic into up & down fluxes using the surface boundary
+    ! conditions.  Start from top down (really surface up for flipped
+    ! TPCORE)
+    !
+    ! By construction, MASSFLUP is flux into the bottom of the box. The
+    ! flux at the bottom of KM (the surface box) is not zero by design.
+    ! (phs, 3/4/08)
+    !======================================================================
+    IF ( State_Diag%Archive_AdvFluxVert ) THEN
 
-       !======================================================================
-       ! MODIFICATION by Harvard Atmospheric Chemistry Modeling Group
-       !
-       ! DIAGNOSTICS: Up/down flux of tracer [kg/s]
-       ! (bmy, bdf, 9/28/04, ccarouge 12/2/08)
-       !
-       ! The vertical transport done in qmap.  We need to find the difference
-       ! in order to to interpret transport.
-       !
-       ! Break up diagnostic into up & down fluxes using the surface boundary
-       ! conditions.  Start from top down (really surface up for flipped
-       ! TPCORE)
-       !
-       ! By construction, MASSFLUP is flux into the bottom of the box. The
-       ! flux at the bottom of KM (the surface box) is not zero by design.
-       ! (phs, 3/4/08)
-       !======================================================================
-       IF ( State_Diag%Archive_AdvFluxVert ) THEN
+       !$OMP PARALLEL DO                           &
+       !$OMP DEFAULT( SHARED                     ) &
+       !$OMP PRIVATE( S, IQ, K, J, I, DTC, Kflip )
+       DO S = 1, State_Diag%Map_AdvFluxVert%nSlots
 
-          ! Zero temp array
-          DTC = 0e+0_fp
+          ! Get the advectId from the modelId
+          IQ = State_Diag%Map_AdvFluxVert%slot2Id(S)
 
-          !$OMP PARALLEL DO              &
-          !$OMP DEFAULT( SHARED )        &
-          !$OMP PRIVATE( I, J, K, Kflip )
+          ! Loop over grid boxes
           DO K = 1, KM
           DO J = 1, JM
           DO I = 1, IM
@@ -1156,29 +1100,19 @@ CONTAINS
              !
              !     -- Bob Yantosca (28 Mar 2017)
              !
-             DTC(I,J,K) = FZ(I,J,K,IQ) * AREA_M2(J) * g0_100 / DT
-
-             !----------------------------------------------------------------
-             ! HISTORY (aka netCDF diagnostics)
-             !
-             ! N/S flux of advected species
-             !
-             ! NOTE: when bpch is removed, consider rewriting loop for
-             ! efficiency (e.g. move IF statemetn outside loop)
-             !----------------------------------------------------------------
+             DTC = FZ(I,J,K,IQ) * AREA_M2(J) * g0_100 / DT
 
              ! Units: [kg/s]
              ! But consider changing to area-independent units [kg/m2/s]
-             Kflip                                = KM - K + 1  !flip vert
-             State_Diag%AdvFluxVert(I,J,Kflip,IQ) = DTC(I,J,K)
+             Kflip                               = KM - K + 1  !flip vert
+             State_Diag%AdvFluxVert(I,J,Kflip,S) = DTC
 
           ENDDO
           ENDDO
           ENDDO
-          !$OMP END PARALLEL DO
-
-       ENDIF
-    ENDDO
+       ENDDO
+       !$OMP END PARALLEL DO
+    ENDIF
 
   END SUBROUTINE Tpcore_FvDas
 !EOC
@@ -1243,10 +1177,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1399,12 +1330,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1503,11 +1429,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1621,10 +1543,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1771,13 +1690,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel do loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
-!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1955,11 +1868,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2145,10 +2054,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2264,12 +2170,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2364,11 +2265,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2446,7 +2343,7 @@ CONTAINS
     INTEGER, INTENT(IN)  :: ILO,    IHI
     INTEGER, INTENT(IN)  :: JULO,   JHI
 
-    ! Set to F if called on Master or T if called by Slaves
+    ! Set to F if called on root core or T if called by secondary cores
     ! (NOTE: This is only for MPI parallelization, for OPENMP it should be F)
     LOGICAL, INTENT(IN)  :: do_reduction
 
@@ -2476,12 +2373,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2581,7 +2473,7 @@ CONTAINS
     INTEGER, INTENT(IN)  :: ILO,    IHI
     INTEGER, INTENT(IN)  :: JULO,   JHI
 
-    ! Set to T if called on Master or F if called by slaves
+    ! Set to T if called on root core or F if called by secondary cores
     ! NOTE: This seems not to be used here....)
     LOGICAL, INTENT(IN)   :: do_reduction
 
@@ -2605,12 +2497,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent. Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2735,11 +2622,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -2875,12 +2758,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3128,11 +3006,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3286,12 +3160,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3413,13 +3282,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.  Also make a logical
-!                               to test if we are using an extended polar cap.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3586,12 +3449,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3844,12 +3702,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -3967,13 +3820,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
-!                               Also remove the allocatable arrays, which
-!                               interfere w/ OpenMP parallelization.
-!   01 Apr 2009 - C. Carouge  - The input arrays are now 2D only.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4193,10 +4040,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4421,12 +4265,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4589,12 +4428,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4740,12 +4574,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -4920,12 +4749,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -5105,12 +4929,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -5298,12 +5117,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -5392,12 +5206,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.  Added
-!                               OpenMP parallel DO loops.
-!   01 Apr 2009 - C. Carouge  - Moved the IK loop outside the subroutine.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -5552,10 +5361,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -6058,10 +5864,7 @@ CONTAINS
 !                               Yeh with the TPCORE routines from GMI model.
 !                               This eliminates the polar overshoot in the
 !                               stratosphere.
-!   05 Dec 2008 - R. Yantosca - Updated documentation and added ProTeX headers.
-!                               Declare all REAL variables as REAL(fp).  Also
-!                               make sure all numerical constants are declared
-!                               with the "D" double-precision exponent.
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC

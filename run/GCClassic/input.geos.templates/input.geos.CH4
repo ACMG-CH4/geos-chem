@@ -6,7 +6,9 @@ Run directory           : ./
 Root data directory     : {DATA_ROOT}
 Met field               : {MET}
 Simulation name         : {SIM}
+Species database file   : ./species_database.yml
 Turn on debug printout? : F
+Use GC classic timers?  : F
 ------------------------+------------------------------------------------------
 %%% GRID MENU %%%       :
 Grid resolution         : {RES}
@@ -35,7 +37,6 @@ Turn on PBL Mixing?     : T
  => Use non-local PBL?  : T
 ------------------------+------------------------------------------------------
 %%% EMISSIONS MENU %%%  :
-Turn on emissions?      : T
 HEMCO Input file        : HEMCO_Config.rc
 Switches for UCX        :---
  => Use CH4 emissions?  : F
@@ -91,7 +92,7 @@ Overhead O3 for FAST-JX :---
 Gamma HO2               : 0.2
 ------------------------+------------------------------------------------------
 %%% PHOTOLYSIS MENU %%% :
-FAST-JX directory       : {DATA_ROOT}/CHEM_INPUTS/FAST_JX/v2019-10/
+FAST-JX directory       : {DATA_ROOT}/CHEM_INPUTS/FAST_JX/v2020-02/
 ------------------------+------------------------------------------------------
 %%% RADIATION MENU %%%  :
 AOD Wavelength (nm)     : 550
@@ -117,7 +118,7 @@ Do analytical inversion?: F
 Turn on ObsPack diag?   : F
 Quiet logfile output    : F
 ObsPack input file      : ./obspack_co2_1_OCO2MIP_2018-11-28.YYYYMMDD.nc
-ObsPack output file     : GEOSChem.ObsPack.YYYYMMDD_hhmmz.nc4
+ObsPack output file     : ./OutputDir/GEOSChem.ObsPack.YYYYMMDD_hhmmz.nc4
 ObsPack output species  : NO CO O3
 ------------------------+------------------------------------------------------
 ###############################################################################
@@ -153,7 +154,7 @@ diaginfo.dat path       : diaginfo.dat
 tracerinfo.dat path     : tracerinfo.dat
 ------------------------+------------------------------------------------------
 %%% DIAGNOSTIC MENU %%% :
-Binary punch file name  : trac_avg.geosfp_4x5_benchmark.YYYYMMDDhhmm
+Binary punch file name  : ./OutputDir/GEOSChem.YYYYMMDD.bpch
 Diagnostic Entries ---> :  L   Tracers to print out for each diagnostic
 ND03: Hg emissions, P/L :  0   all
 ND06: Dust aer source   :  1   all
@@ -173,7 +174,7 @@ Output file name        : plane.log.YYYYMMDD
 Turn on ND51 diagnostic : F
 LT avg timeseries file  : ts_satellite.YYYYMMDD.bpch
 Output as HDF5?         : F
-Tracers to include      : 46 504 506
+Tracers to include      : 1
 GMT Hour for disk write :   0
 Avg Period [LT hours]   :   9  11
 IMIN, IMAX of region    :   1  72
@@ -182,9 +183,9 @@ LMIN, LMAX of region    :   1  40
 -------------------------------------------------------------------------------
 %%% ND51b MENU %%%      :
 Turn on ND51b diagnstic : F
-LT avg timeseries file  : ts_13_15.NA.YYYYMMDD.h5
+LT avg timeseries file  : ts_13_15.NA.YYYYMMDD.bpch
 Output as HDF5?         : F
-Tracers to include      : 1 4 20 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 60 61 62 63 64 65 66 72 73 75 82 83 84 85 86 87 93 94 98 99
+Tracers to include      : 1
 GMT Hour for disk write :  1
 Avg Period [LT hours]   :  13  15
 IMIN, IMAX of region    :   1  72

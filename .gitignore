@@ -1,3 +1,6 @@
+HEMCO/.git/
+HEMCO/.github/
+HEMCO/.gitignore
 *.[oax]
 *.mod
 *.MOD
@@ -6,14 +9,10 @@
 *.bak
 *.patch
 *.diff
-geos
-geostomas
-geosapm
+gcclassic
 diffs
 bak
 misc
-test
-GIGC
 *.pp.*
 *.pdb
 *.inst.*
@@ -22,5 +21,7 @@ GIGC
 *.log
 bin/*
 build/
+build_*/
 *___.h
 *___.rc
+core.*

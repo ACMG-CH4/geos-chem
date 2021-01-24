@@ -68,6 +68,7 @@ MODULE Input_Opt_Mod
      CHARACTER(LEN=255)          :: CHEM_INPUTS_DIR
      CHARACTER(LEN=255)          :: MetField
      CHARACTER(LEN=255)          :: SimulationName
+     CHARACTER(LEN=255)          :: SpcDatabaseFile
      LOGICAL                     :: ITS_A_CH4_SIM
      LOGICAL                     :: ITS_A_CO2_SIM
      LOGICAL                     :: ITS_A_FULLCHEM_SIM
@@ -77,6 +78,8 @@ MODULE Input_Opt_Mod
      LOGICAL                     :: ITS_A_TAGO3_SIM
      LOGICAL                     :: ITS_A_TAGCO_SIM
      LOGICAL                     :: ITS_AN_AEROSOL_SIM
+     LOGICAL                     :: LPRT
+     LOGICAL                     :: useTimers
 
      !----------------------------------------
      ! PASSIVE SPECIES MENU fields
@@ -144,6 +147,8 @@ MODULE Input_Opt_Mod
      LOGICAL                     :: LCH4EMIS
      LOGICAL                     :: LCH4SBC
      LOGICAL                     :: LSETH2O
+     LOGICAL                     :: LHCodedOrgHal
+     LOGICAL                     :: LCMIP6OrgHal
      LOGICAL                     :: DoLightNOx ! Shadow for LightNOX extension
 
      !----------------------------------------
@@ -183,7 +188,7 @@ MODULE Input_Opt_Mod
      LOGICAL                     :: USE_ONLINE_O3
      LOGICAL                     :: USE_O3_FROM_MET
      LOGICAL                     :: USE_TOMS_O3
-#if defined( MODEL_GEOS )
+#ifdef MODEL_GEOS
      LOGICAL                     :: LGMIOZ
 #endif
 
@@ -262,7 +267,6 @@ MODULE Input_Opt_Mod
      INTEGER                     :: ND72   ! RRTMG
 
      INTEGER                     :: TS_DIAG
-     LOGICAL                     :: LPRT
      INTEGER,            POINTER :: TINDEX(:,:)
      INTEGER,            POINTER :: TCOUNT(:)
      INTEGER,            POINTER :: TMAX(:)
@@ -275,9 +279,9 @@ MODULE Input_Opt_Mod
      !----------------------------------------
      ! PLANEFLIGHT MENU fields
      !----------------------------------------
-     LOGICAL                     :: DO_PF
-     CHARACTER(LEN=255)          :: PF_IFILE
-     CHARACTER(LEN=255)          :: PF_OFILE
+     LOGICAL                     :: Do_Planeflight
+     CHARACTER(LEN=255)          :: Planeflight_InFile
+     CHARACTER(LEN=255)          :: Planeflight_OutFile
 
      !----------------------------------------
      ! OBSPACK MENU fields
@@ -386,7 +390,7 @@ MODULE Input_Opt_Mod
      !----------------------------------------
      ! Fields for interface to GEOS-5 GCM
      !----------------------------------------
-#if defined( MODEL_GEOS )
+#ifdef MODEL_GEOS
      LOGICAL                     :: LCAPTROP     = .FALSE.
      !REAL(fp)                    :: OZONOPAUSE   = -999.0
      LOGICAL                     :: haveImpRst   = .FALSE.
@@ -401,7 +405,6 @@ MODULE Input_Opt_Mod
      INTEGER, POINTER            :: Jval_IDs(:)             ! J-values to be diagnosed
      INTEGER                     :: FJX_EXTRAL_ITERMAX = 5
      LOGICAL                     :: FJX_EXTRAL_ERR     = .TRUE.
-     LOGICAL                     :: KppStop            = .TRUE. ! Stop KPP if integration fails twice
      ! Toggle for het rates. If true, turns off three Cl producing het reactions
      ! in the stratosphere. In MODEL_GEOS, this flag is set in GEOSCHEMchem_GridComp.rc
      LOGICAL                     :: TurnOffHetRates = .FALSE.
@@ -410,6 +413,16 @@ MODULE Input_Opt_Mod
      LOGICAL                     :: TurnOffHetRates
 #endif
 
+#if defined( MODEL_GEOS ) || defined( MODEL_WRF )
+     LOGICAL                     :: KppStop            = .TRUE. ! Stop KPP if integration fails twice
+#endif
+
+#if defined( MODEL_CESM )
+     LOGICAL                     :: onlineAlbedo       = .TRUE. ! Use albedo from land model
+     LOGICAL                     :: onlineLandTypes    = .TRUE. ! Use land types from land model
+     LOGICAL                     :: ddVel_CLM          = .TRUE. ! Use dry deposition velocities as computed by the Community Land Model
+     LOGICAL                     :: applyQtend         = .TRUE. ! Apply water vapor tendency to specific humidity
+#endif
      !----------------------------------------
      ! Fields for LINOZ strat chem
      !----------------------------------------
@@ -424,7 +437,7 @@ MODULE Input_Opt_Mod
 ! !REMARKS:
 !
 ! !REVISION HISTORY:
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -465,7 +478,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  01 Nov 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -521,16 +534,12 @@ CONTAINS
     ! Set to large placeholder values
     !----------------------------------------
 #ifdef RRTMG
-    Input_Opt%Max_BPCH_Diag          = 187 ! Mirror MAX_DIAG in CMN_DIAG_mod.F
+    Input_Opt%Max_BPCH_Diag          = 187 ! Mirror MAX_DIAG in CMN_DIAG_mod.F90
 #else
-    Input_Opt%Max_BPCH_Diag          = 80  ! Mirror MAX_DIAG in CMN_DIAG_mod.F
+    Input_Opt%Max_BPCH_Diag          = 80  ! Mirror MAX_DIAG in CMN_DIAG_mod.F90
 #endif
     Input_Opt%Max_Families           = 250
-#ifdef TOMAS
     Input_Opt%Max_AdvectSpc          = 600
-#else
-    Input_Opt%Max_AdvectSpc          = 300
-#endif
     Input_Opt%Max_PassiveSpc         = 50
 
     !----------------------------------------
@@ -546,6 +555,7 @@ CONTAINS
     Input_Opt%CHEM_INPUTS_DIR        = './'
     Input_Opt%MetField               = ''
     Input_Opt%SimulationName         = ''
+    Input_Opt%SpcDatabaseFile        = ''
     Input_Opt%ITS_A_CH4_SIM          = .FALSE.
     Input_Opt%ITS_A_CO2_SIM          = .FALSE.
     Input_Opt%ITS_A_FULLCHEM_SIM     = .FALSE.
@@ -555,6 +565,8 @@ CONTAINS
     Input_Opt%ITS_A_TAGO3_SIM        = .FALSE.
     Input_Opt%ITS_A_TAGCO_SIM        = .FALSE.
     Input_Opt%ITS_AN_AEROSOL_SIM     = .FALSE.
+    Input_Opt%LPRT                   = .FALSE.
+    Input_Opt%useTimers              = .FALSE.
 
     !----------------------------------------
     ! ADVECTED SPECIES MENU fields
@@ -639,6 +651,8 @@ CONTAINS
     Input_Opt%LCH4EMIS               = .FALSE.
     Input_Opt%LCH4SBC                = .FALSE.
     Input_Opt%LSETH2O                = .FALSE.
+    Input_Opt%LHCodedOrgHal          = .FALSE.
+    Input_Opt%LCMIP6OrgHal           = .FALSE.
     Input_Opt%DoLightNOx             = .FALSE.
 
     !----------------------------------------
@@ -671,7 +685,7 @@ CONTAINS
     Input_Opt%LSCHEM                 = .FALSE.
     Input_Opt%LLINOZ                 = .FALSE.
     Input_Opt%LSYNOZ                 = .FALSE.
-#if defined( MODEL_GEOS )
+#ifdef MODEL_GEOS
     Input_Opt%LGMIOZ                 = .FALSE.
 #endif
     Input_Opt%TS_CHEM                = 0
@@ -729,9 +743,9 @@ CONTAINS
     !----------------------------------------
     Input_Opt%LTRAN                  = .FALSE.
     Input_Opt%LFILL                  = .FALSE.
-    Input_Opt%TPCORE_IORD            = .FALSE.
-    Input_Opt%TPCORE_JORD            = .FALSE.
-    Input_Opt%TPCORE_KORD            = .FALSE.
+    Input_Opt%TPCORE_IORD            = 0
+    Input_Opt%TPCORE_JORD            = 0
+    Input_Opt%TPCORE_KORD            = 0
     Input_Opt%TS_DYN                 = 0
 
     !----------------------------------------
@@ -754,6 +768,7 @@ CONTAINS
     Input_Opt%CO2_EFFECT             = .FALSE.
     Input_Opt%RS_SCALE               = 1.0_fp
     Input_Opt%RA_Alt_Above_Sfc       = 10       ! default height
+
 
     !----------------------------------------
     ! GAMAP_MENU fields
@@ -789,7 +804,6 @@ CONTAINS
     Input_Opt%ND61                   = 0
     Input_Opt%ND65                   = 0
     Input_Opt%ND72                   = 0
-    Input_Opt%LPRT                   = .FALSE.
     Input_Opt%TCOUNT(:)              = 0
     Input_Opt%TMAX(:)	             = 0
 #if defined( ESMF_ ) || defined( EXTERNAL_GRID ) || defined( EXTERNAL_FORCING )
@@ -804,9 +818,9 @@ CONTAINS
     !----------------------------------------
     ! PLANEFLIGHT MENU fields
     !----------------------------------------
-    Input_Opt%DO_PF                  = .FALSE.
-    Input_Opt%PF_IFILE               = ''
-    Input_Opt%PF_OFILE               = ''
+    Input_Opt%Do_Planeflight         = .FALSE.
+    Input_Opt%Planeflight_InFile     = ''
+    Input_Opt%Planeflight_OutFile    = ''
 
     !----------------------------------------
     ! PLANEFLIGHT MENU fields
@@ -915,7 +929,7 @@ CONTAINS
     !----------------------------------------
     ! Fields for interface to GEOS-5 GCM
     !----------------------------------------
-#if defined( MODEL_GEOS )
+#ifdef MODEL_GEOS
 !    Input_Opt%OZONOPAUSE             = -999.0
 !    Input_Opt%haveImpRst             = .FALSE.
 !    Input_Opt%AlwaysSetH2O           = .FALSE.
@@ -965,15 +979,11 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Set_Input_Opt_Advect( am_I_Root, Input_Opt, RC )
+  SUBROUTINE Set_Input_Opt_Advect( Input_Opt, RC )
 !
 ! !USES:
 !
     USE ErrCode_Mod
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,        INTENT(IN)    :: am_I_Root   ! Are we on the root CPU?
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -989,7 +999,7 @@ CONTAINS
 
 ! !REVISION HISTORY:
 !  26 Jan 2018 - M. Sulprizio- Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1036,15 +1046,11 @@ CONTAINS
 !\\
 ! !INTERFACE:
 !
-  SUBROUTINE Cleanup_Input_Opt( am_I_Root, Input_Opt, RC )
+  SUBROUTINE Cleanup_Input_Opt( Input_Opt, RC )
 !
 ! !USES:
 !
     USE ErrCode_Mod
-!
-! !INPUT PARAMETERS:
-!
-    LOGICAL,        INTENT(IN)    :: am_I_Root   ! Is this the root CPU?
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -1056,7 +1062,7 @@ CONTAINS
 !
 ! !REVISION HISTORY:
 !  02 Nov 2012 - R. Yantosca - Initial version
-!  See the Git history with the gitk browser!
+!  See https://github.com/geoschem/geos-chem for complete history
 !EOP
 !------------------------------------------------------------------------------
 !BOC
@@ -1194,7 +1200,7 @@ CONTAINS
        Input_Opt%LSPECRADMENU => NULL()
     ENDIF
 
-#if defined( MODEL_GEOS )
+#ifdef MODEL_GEOS
     !=======================================================================
     ! These fields of Input_Opt are only finalized when
     ! GEOS-Chem is coupled to the online NASA/GEOS ESM
