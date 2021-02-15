@@ -859,13 +859,15 @@ CONTAINS
 ! !USES:
 !
     USE ErrCode_Mod
-    USE Input_Opt_Mod,  ONLY : OptInput
-    USE State_Chm_Mod,  ONLY : ChmState
-    USE State_Diag_Mod, ONLY : DgnState
-    USE State_Grid_Mod, ONLY : GrdState
-    USE State_Met_Mod,  ONLY : MetState
-    USE TIME_MOD,       ONLY : GET_TS_CHEM
-    USE TIME_MOD,       ONLY : GET_MONTH
+    USE HCO_Calc_Mod,     ONLY : HCO_EvalFld
+    USE HCO_State_GC_Mod, ONLY : HcoState
+    USE Input_Opt_Mod,    ONLY : OptInput
+    USE State_Chm_Mod,    ONLY : ChmState
+    USE State_Diag_Mod,   ONLY : DgnState
+    USE State_Grid_Mod,   ONLY : GrdState
+    USE State_Met_Mod,    ONLY : MetState
+    USE TIME_MOD,         ONLY : GET_TS_CHEM
+    USE TIME_MOD,         ONLY : GET_MONTH
 !
 ! !INPUT PARAMETERS:
 !
@@ -898,16 +900,17 @@ CONTAINS
 ! !LOCAL VARIABLES:
 !
     ! Scalars
-    INTEGER           :: I,  J,    L
-    REAL(fp)          :: DT, GCH4, Spc2GCH4
-    REAL(fp)          :: KRATE, C_OH
-    REAL(fp)          :: KRATE_Cl, C_Cl
-
+    INTEGER            :: I,  J,    L
+    REAL(fp)           :: DT, GCH4, Spc2GCH4
+    REAL(fp)           :: KRATE, C_OH
+    REAL(fp)           :: KRATE_Cl, C_Cl
+    CHARACTER(LEN=255) :: ErrMsg
+    CHARACTER(LEN=255) :: ThisLoc
     ! Pointers
-    REAL(fp), POINTER :: Spc(:,:,:,:)
+    REAL(fp), POINTER  :: Spc(:,:,:,:)
 
     ! Array of scale factors for OH (from HEMCO)
-    REAL(fp) :: OH_SF(State_Grid%NX,State_Grid%NY)
+    REAL(fp)           :: OH_SF(State_Grid%NX,State_Grid%NY)
 
     !=================================================================
     ! CH4_DECAY begins here!
