@@ -657,6 +657,12 @@ if [[ "x${nested_sim}" == "xT" ]]; then
     fi
 fi
 
+# Modifu input files for CH4 simulations
+if [[ ${sim_name} = "CH4" ]]; then
+    sed -i -e "s|pertpert|1.0|"       input.geos
+    sed -i -e "s|clustnumclustnum|1|" input.geos
+fi
+
 # Modify input files for POPs simulations
 if [[ ${sim_name} =~ "POPs" ]]; then
     sed -i -e "s|{POPs_SPC}|${POP_SPC}|"               input.geos
