@@ -65,6 +65,29 @@ COLLECTIONS: 'Restart',
                               'Met_TMPU1                      ', 'GIGCchem',
 ::
 #==============================================================================
+# %%%%% THE Metrics COLLECTION %%%%%
+#
+# Diagnostics for chemistry metrics such as global mean OH concentration,
+# MCF lifetime, and CH4 lifetime.
+#
+# This diagnostic collection should always be left on.
+# Use the run-directory script ./metrics_ch4.py to print results.
+#
+# Available for full-chemistry and CH4 simulations only.
+#==============================================================================
+  Metrics.template:           '%y4%m2%d2_%h2%n2z.nc4',
+  Metrics.frequency:          'End',
+  Metrics.duration:           'End',
+  Metrics.mode:               'time-averaged'
+  Metrics.fields:             'AirMassColumnFull             ',
+                              'CH4emission                   ',
+                              'CH4massColumnFull             ',
+                              'CH4massColumnTrop             ',
+                              'LossOHbyCH4columnTrop         ',
+                              'LossOHbyMCFcolumnTrop         ',
+                              'OHwgtByAirMassColumnFull      ',
+::
+#==============================================================================
 # %%%%% THE SpeciesConc COLLECTION %%%%%
 #
 # GEOS-Chem species concentrations (default = advected species)
