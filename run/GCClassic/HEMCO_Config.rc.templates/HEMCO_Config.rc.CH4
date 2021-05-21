@@ -188,15 +188,15 @@ Warnings:                    1
 # (Scarpelli et. al, Environ. Res. Lett., 2020) ---
 #==============================================================================
 (((Scarpelli_Mexico
-0 MEX_OIL               $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_oil_2015.nc          emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    1 100
-0 MEX_GAS               $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_gas_2015.nc          emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    2 100
-0 MEX_COAL              $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_coal_2015.nc         emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    3 100
-0 MEX_LIVESTOCK_A       $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_livestock_A_2015.nc  emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    4 100
-0 MEX_LIVESTOCK_B       $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_livestock_B_2015.nc  emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 10/1001 4 100
-0 MEX_LANDFILLS         $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_landfill_2015.nc     emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    5 100
-0 MEX_WASTEWATER        $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_waste_2015.nc        emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    6 100
-0 MEX_RICE              $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_rice_2015.nc         emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 11/1001 7 100
-0 MEX_OTHER             $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_other_anthro_2015.nc emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    8 100
+0 MEX_OIL               $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_oil_2015.nc          emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    1 30
+0 MEX_GAS               $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_gas_2015.nc          emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    2 30
+0 MEX_COAL              $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_coal_2015.nc         emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    3 30
+0 MEX_LIVESTOCK_A       $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_livestock_A_2015.nc  emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    4 30
+0 MEX_LIVESTOCK_B       $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_livestock_B_2015.nc  emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 10/1001 4 30
+0 MEX_LANDFILLS         $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_landfill_2015.nc     emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    5 30
+0 MEX_WASTEWATER        $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_waste_2015.nc        emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    6 30
+0 MEX_RICE              $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_rice_2015.nc         emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 11/1001 7 30
+0 MEX_OTHER             $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_other_anthro_2015.nc emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1001    8 30
 
 ### Make sure to include offshore/coastal emissions (Hier=1 to add to EDGAR) ###
 0 MEX_OIL_COAST         $ROOT/CH4/v2020-09/Scarpelli_Mexico/MEX_Tia2020_oil_2015.nc          emis_ch4 2015/1/1/0 C xy molec/cm2/s CH4 1010    1 1
@@ -248,9 +248,9 @@ Warnings:                    1
 # This inventory will replace EDGAR (oil, gas, & coal)
 #==============================================================================
 (((GFEI
-0 GFEI_CH4_OIL  $ROOT/CH4/v2020-02/GFEI/Global_Fuel_Exploitation_Inventory_Oil_All.nc  emis_ch4_best 2012/1/1/0 C xy molec/cm2/s CH4 -  1 10
-0 GFEI_CH4_GAS  $ROOT/CH4/v2020-02/GFEI/Global_Fuel_Exploitation_Inventory_Gas_All.nc  emis_ch4_best 2012/1/1/0 C xy molec/cm2/s CH4 -  2 10
-0 GFEI_CH4_COAL $ROOT/CH4/v2020-02/GFEI/Global_Fuel_Exploitation_Inventory_Coal.nc     emis_ch4_best 2012/1/1/0 C xy molec/cm2/s CH4 -  3 10
+0 GFEI_CH4_OIL  $ROOT/CH4/v2020-02/GFEI/Global_Fuel_Exploitation_Inventory_Oil_All.nc  emis_ch4_best 2012/1/1/0 C xy molec/cm2/s CH4 -  1 5
+0 GFEI_CH4_GAS  $ROOT/CH4/v2020-02/GFEI/Global_Fuel_Exploitation_Inventory_Gas_All.nc  emis_ch4_best 2012/1/1/0 C xy molec/cm2/s CH4 -  2 5
+0 GFEI_CH4_COAL $ROOT/CH4/v2020-02/GFEI/Global_Fuel_Exploitation_Inventory_Coal.nc     emis_ch4_best 2012/1/1/0 C xy molec/cm2/s CH4 -  3 5
 )))GFEI
 
 #==============================================================================
